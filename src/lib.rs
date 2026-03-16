@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod dshot;
+pub mod wire;
 
 use embassy_time::Instant;
 use nalgebra::{SVector, UnitQuaternion, Vector3};
@@ -49,6 +50,15 @@ pub struct VehicleOdometry {
 }
 
 impl Message for VehicleOdometry {}
+
+#[derive(Clone, defmt::Format)]
+pub struct ViconPose {
+    pub timestamp: Instant,
+    pub position: Vector3<f32>,
+    pub orientation: UnitQuaternion<f32>,
+}
+
+impl Message for ViconPose {}
 
 #[derive(Clone, defmt::Format)]
 pub struct RcInput {
