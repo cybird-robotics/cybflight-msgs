@@ -56,6 +56,10 @@ pub struct ViconPose {
     pub timestamp: Instant,
     pub position: Vector3<f32>,
     pub orientation: UnitQuaternion<f32>,
+    /// VICON camera capture time (UTC microseconds since UNIX epoch).
+    pub capture_time_utc_us: i64,
+    /// GS PC send time (UTC microseconds since UNIX epoch).
+    pub gs_send_time_utc_us: i64,
 }
 
 impl Message for ViconPose {}

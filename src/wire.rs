@@ -24,6 +24,11 @@ pub mod msg_id {
 
     // Uplink (ground → STM32)
     pub const POSE: u8 = 128;
+    pub const TIME_SYNC: u8 = 129;
+    pub const PING_RESP: u8 = 130;
+
+    // Downlink (STM32 → ground)  — time sync
+    pub const PING: u8 = 16;
 }
 
 /// Maximum wire payload size in bytes.
@@ -403,11 +408,16 @@ impl WireArmDisarm {
 // Uplink types (ground → STM32)
 // ---------------------------------------------------------------------------
 
-/// Wire pose from ground station — 36 bytes.
+/// Wire pose from ground station — 44 bytes.
+///
+/// Carries per-frame UTC timestamps for latency decomposition:
+/// - `capture_time_us`: VICON camera capture time (gs_time - GetLatencyTotal())
+/// - `gs_send_time_us`: GS PC time just before UDP send
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WirePose {
-    pub timestamp_us: u64,
+    pub capture_time_us: i64,
+    pub gs_send_time_us: i64,
     pub position: [f32; 3],
     pub orientation: [f32; 4], // [x, y, z, w]
 }
@@ -429,6 +439,51 @@ impl WirePose {
             timestamp: rx_time,
             position: nalgebra::Vector3::new(self.position[0], self.position[1], self.position[2]),
             orientation: nalgebra::UnitQuaternion::new_normalize(q),
+            capture_time_utc_us: self.capture_time_us,
+            gs_send_time_utc_us: self.gs_send_time_us,
         }
     }
+}
+
+/// PTP follow-up from ESP32 — 16 bytes.
+///
+/// Carries two NTP timestamps for clock offset computation:
+/// - `esp_send_ntp_us`: ESP32 NTP time captured before UART write (primary estimate)
+/// - `prev_tx_complete_ntp_us`: ESP32 NTP time captured after previous write completed
+///   (refined estimate — eliminates UART delay estimation)
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireTimeSync {
+    pub esp_send_ntp_us: i64,
+    pub prev_tx_complete_ntp_us: i64,
+}
+
+impl WireMessage for WireTimeSync {
+    const MSG_ID: u8 = msg_id::TIME_SYNC;
+}
+
+/// Ping request from STM32 — 12 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WirePing {
+    pub ping_id: u32,
+    pub stm32_send_us: u64,
+}
+
+impl WireMessage for WirePing {
+    const MSG_ID: u8 = msg_id::PING;
+}
+
+/// Ping response from GS — 28 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WirePingResp {
+    pub ping_id: u32,
+    pub stm32_send_us: u64,
+    pub gs_recv_time_us: i64,
+    pub gs_send_time_us: i64,
+}
+
+impl WireMessage for WirePingResp {
+    const MSG_ID: u8 = msg_id::PING_RESP;
 }
