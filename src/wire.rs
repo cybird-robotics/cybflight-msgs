@@ -20,6 +20,7 @@ pub mod msg_id {
     pub const BARO_2: u8 = 12;
     pub const ATTITUDE_CONTROL_SETPOINT: u8 = 13;
     pub const MANUAL_CONTROL_SETPOINT: u8 = 14;
+    pub const ARM_DISARM: u8 = 15;
 
     // Uplink (ground → STM32)
     pub const POSE: u8 = 128;
@@ -373,6 +374,27 @@ impl WireManualControlSetpoint {
             roll_rate: msg.roll_rate,
             pitch_rate: msg.pitch_rate,
             yaw_rate: msg.yaw_rate,
+        }
+    }
+}
+
+/// Wire arm/disarm state — 9 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireArmDisarm {
+    pub timestamp_us: u64,
+    pub armed: u8,
+}
+
+impl WireMessage for WireArmDisarm {
+    const MSG_ID: u8 = msg_id::ARM_DISARM;
+}
+
+impl WireArmDisarm {
+    pub fn from_msg(msg: &crate::ArmDisarm) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            armed: msg.armed as u8,
         }
     }
 }
