@@ -29,6 +29,7 @@ pub mod msg_id {
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
+    pub const TIME_SYNC_STATUS: u8 = 17;
 }
 
 /// Maximum wire payload size in bytes.
@@ -486,4 +487,18 @@ pub struct WirePingResp {
 
 impl WireMessage for WirePingResp {
     const MSG_ID: u8 = msg_id::PING_RESP;
+}
+
+/// Time sync diagnostics downlink — 25 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireTimeSyncStatus {
+    pub synced: u8,
+    pub offset_us: i64,
+    pub ping_rtt_us: u64,
+    pub ping_clock_err_us: i64,
+}
+
+impl WireMessage for WireTimeSyncStatus {
+    const MSG_ID: u8 = msg_id::TIME_SYNC_STATUS;
 }
