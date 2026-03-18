@@ -1,13 +1,19 @@
 #![no_std]
 
-pub mod dshot;
 pub mod wire;
 
+#[cfg(feature = "embedded")]
+pub mod dshot;
+
+#[cfg(feature = "embedded")]
 use embassy_time::Instant;
+#[cfg(feature = "embedded")]
 use nalgebra::{SVector, UnitQuaternion, Vector3};
 
+#[cfg(feature = "embedded")]
 pub trait Message: defmt::Format + Clone + Sync + 'static {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct Imu {
     pub timestamp: Instant,
@@ -16,32 +22,40 @@ pub struct Imu {
     pub temp_c: f32,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for Imu {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct VehicleAttitude {
     pub timestamp: Instant,
     pub orientation: UnitQuaternion<f32>,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for VehicleAttitude {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct Pose {
     pub position: Vector3<f32>,
     pub orientation: UnitQuaternion<f32>,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for Pose {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct Twist {
     pub linear: Vector3<f32>,
     pub angular: Vector3<f32>,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for Twist {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct VehicleOdometry {
     pub timestamp: Instant,
@@ -49,8 +63,10 @@ pub struct VehicleOdometry {
     pub twist: Twist,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for VehicleOdometry {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ViconPose {
     pub timestamp: Instant,
@@ -62,8 +78,10 @@ pub struct ViconPose {
     pub gs_send_time_utc_us: i64,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for ViconPose {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct RcInput {
     pub timestamp: Instant,
@@ -73,8 +91,10 @@ pub struct RcInput {
     pub channel_count: u8,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for RcInput {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct RcLinkStatus {
     pub timestamp: Instant,
@@ -88,11 +108,13 @@ pub struct RcLinkStatus {
     pub rf_mode: u8,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for RcLinkStatus {}
 
 /// NMPC position setpoint.  Published by the RC-input-to-setpoint converter
 /// (not yet implemented); the NMPC driver falls back to a hardcoded hover
 /// target until a publisher exists.
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct NmpcSetpoint {
     pub timestamp: Instant,
@@ -100,21 +122,26 @@ pub struct NmpcSetpoint {
     pub position: Vector3<f32>,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for NmpcSetpoint {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct DshotMotorTelemetry {
     pub value: dshot::TelemetryValue,
     pub raw: Option<u16>,
 }
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct DshotTelemetry {
     pub timestamp: Instant,
     pub motors: [DshotMotorTelemetry; 4],
 }
+#[cfg(feature = "embedded")]
 impl Message for DshotTelemetry {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct GpsFix {
     pub timestamp: Instant,
@@ -130,8 +157,10 @@ pub struct GpsFix {
     pub pdop: u16,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for GpsFix {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct MagSample {
     pub timestamp: Instant,
@@ -139,8 +168,10 @@ pub struct MagSample {
     pub temp_c: f32,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for MagSample {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct BaroSample {
     pub timestamp: Instant,
@@ -148,9 +179,12 @@ pub struct BaroSample {
     pub temp_c: f32,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for BaroSample {}
 
+#[cfg(feature = "embedded")]
 const OCP_OUTPUT_SIZE: usize = 4;
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct OcpSolverOutput {
     pub timestamp: Instant,
@@ -159,8 +193,10 @@ pub struct OcpSolverOutput {
     pub converged: bool,
     pub solve_time_us: u64,
 }
+#[cfg(feature = "embedded")]
 impl Message for OcpSolverOutput {}
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct AttitudeControlSetpoint {
     pub timestamp: Instant,
@@ -170,11 +206,14 @@ pub struct AttitudeControlSetpoint {
     pub torque_n_m: Vector3<f32>,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for AttitudeControlSetpoint {}
 
+#[cfg(feature = "embedded")]
 #[derive(Debug, Copy, Clone, defmt::Format)]
 pub struct NormalizedThrottle(f32);
 
+#[cfg(feature = "embedded")]
 impl NormalizedThrottle {
     pub fn new(value: f32) -> Option<Self> {
         if (0.0..=1.0).contains(&value) {
@@ -193,12 +232,14 @@ impl NormalizedThrottle {
     }
 }
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ActuatorMotors {
     pub timestamp: Instant,
     pub motor_commands: [NormalizedThrottle; 4],
 }
 
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ArmDisarm {
     pub timestamp: Instant,
@@ -206,6 +247,7 @@ pub struct ArmDisarm {
 }
 
 /// Manual control setpoint: thrust + body rates from RC sticks.
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ManualControlSetpoint {
     pub timestamp: Instant,
@@ -219,4 +261,5 @@ pub struct ManualControlSetpoint {
     pub yaw_rate: f32,
 }
 
+#[cfg(feature = "embedded")]
 impl Message for ManualControlSetpoint {}

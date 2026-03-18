@@ -85,6 +85,7 @@ impl WireMessage for WireImu {
     const MSG_ID: u8 = msg_id::IMU;
 }
 
+#[cfg(feature = "embedded")]
 impl WireImu {
     pub fn from_msg(msg: &crate::Imu) -> Self {
         Self {
@@ -108,6 +109,7 @@ impl WireMessage for WireVehicleAttitude {
     const MSG_ID: u8 = msg_id::VEHICLE_ATTITUDE;
 }
 
+#[cfg(feature = "embedded")]
 impl WireVehicleAttitude {
     pub fn from_msg(msg: &crate::VehicleAttitude) -> Self {
         Self {
@@ -135,6 +137,7 @@ impl WireMessage for WireRcInput {
     const MSG_ID: u8 = msg_id::RC_INPUT;
 }
 
+#[cfg(feature = "embedded")]
 impl WireRcInput {
     pub fn from_msg(msg: &crate::RcInput) -> Self {
         Self {
@@ -160,6 +163,7 @@ impl WireMessage for WireRcLinkStatus {
     const MSG_ID: u8 = msg_id::RC_LINK_STATUS;
 }
 
+#[cfg(feature = "embedded")]
 impl WireRcLinkStatus {
     pub fn from_msg(msg: &crate::RcLinkStatus) -> Self {
         Self {
@@ -185,6 +189,7 @@ impl WireMessage for WireDshotTelemetry {
     const MSG_ID: u8 = msg_id::DSHOT_TELEMETRY;
 }
 
+#[cfg(feature = "embedded")]
 impl WireDshotTelemetry {
     pub fn from_msg(msg: &crate::DshotTelemetry) -> Self {
         let mut erpm = [0u32; 4];
@@ -219,6 +224,7 @@ impl WireMessage for WireOcpSolverOutput {
     const MSG_ID: u8 = msg_id::OCP_SOLVER_OUTPUT;
 }
 
+#[cfg(feature = "embedded")]
 impl WireOcpSolverOutput {
     pub fn from_msg(msg: &crate::OcpSolverOutput) -> Self {
         Self {
@@ -257,6 +263,7 @@ impl WireMessage for WireGpsFix {
     const MSG_ID: u8 = msg_id::GPS_FIX;
 }
 
+#[cfg(feature = "embedded")]
 impl WireGpsFix {
     pub fn from_msg(msg: &crate::GpsFix) -> Self {
         Self {
@@ -288,6 +295,7 @@ impl WireMessage for WireMagSample {
     const MSG_ID: u8 = msg_id::MAG_EXT;
 }
 
+#[cfg(feature = "embedded")]
 impl WireMagSample {
     pub fn from_msg(msg: &crate::MagSample) -> Self {
         Self {
@@ -311,6 +319,7 @@ impl WireMessage for WireBaroSample {
     const MSG_ID: u8 = msg_id::BARO_1;
 }
 
+#[cfg(feature = "embedded")]
 impl WireBaroSample {
     pub fn from_msg(msg: &crate::BaroSample) -> Self {
         Self {
@@ -336,6 +345,7 @@ impl WireMessage for WireAttitudeControlSetpoint {
     const MSG_ID: u8 = msg_id::ATTITUDE_CONTROL_SETPOINT;
 }
 
+#[cfg(feature = "embedded")]
 impl WireAttitudeControlSetpoint {
     pub fn from_msg(msg: &crate::AttitudeControlSetpoint) -> Self {
         Self {
@@ -372,6 +382,7 @@ impl WireMessage for WireManualControlSetpoint {
     const MSG_ID: u8 = msg_id::MANUAL_CONTROL_SETPOINT;
 }
 
+#[cfg(feature = "embedded")]
 impl WireManualControlSetpoint {
     pub fn from_msg(msg: &crate::ManualControlSetpoint) -> Self {
         Self {
@@ -396,6 +407,7 @@ impl WireMessage for WireArmDisarm {
     const MSG_ID: u8 = msg_id::ARM_DISARM;
 }
 
+#[cfg(feature = "embedded")]
 impl WireArmDisarm {
     pub fn from_msg(msg: &crate::ArmDisarm) -> Self {
         Self {
@@ -427,6 +439,7 @@ impl WireMessage for WirePose {
     const MSG_ID: u8 = msg_id::POSE;
 }
 
+#[cfg(feature = "embedded")]
 impl WirePose {
     /// Convert to a `ViconPose` channel message using the local RX timestamp.
     pub fn to_vicon_pose(&self, rx_time: embassy_time::Instant) -> crate::ViconPose {
