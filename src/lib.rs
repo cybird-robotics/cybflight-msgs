@@ -263,3 +263,22 @@ pub struct ManualControlSetpoint {
 
 #[cfg(feature = "embedded")]
 impl Message for ManualControlSetpoint {}
+
+/// Stablized control setpoint: thrust + angles from RC sticks.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct StablizedControlSetpoint {
+    pub timestamp: Instant,
+    /// Normalized thrust [0, 1].
+    pub thrust: f32,
+    /// Roll command (rad).
+    pub roll: f32,
+    /// Pitch command (rad).
+    pub pitch: f32,
+    /// Yaw command (rad).
+    pub yaw: f32,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for StablizedControlSetpoint {}
+
