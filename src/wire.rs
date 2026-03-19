@@ -27,6 +27,8 @@ pub mod msg_id {
     pub const TIME_SYNC: u8 = 129;
     pub const PING_RESP: u8 = 130;
 
+    pub const VEHICLE_ODOMETRY: u8 = 18;
+
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
     pub const TIME_SYNC_STATUS: u8 = 17;
@@ -413,6 +415,44 @@ impl WireArmDisarm {
         Self {
             timestamp_us: msg.timestamp.as_micros(),
             armed: msg.armed as u8,
+        }
+    }
+}
+
+/// Wire vehicle odometry (ESKF output) — 60 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireVehicleOdometry {
+    pub timestamp_us: u64,
+    pub position: [f32; 3],
+    pub orientation: [f32; 4], // [x, y, z, w]
+    pub velocity: [f32; 3],
+}
+
+impl WireMessage for WireVehicleOdometry {
+    const MSG_ID: u8 = msg_id::VEHICLE_ODOMETRY;
+}
+
+impl WireVehicleOdometry {
+    pub fn from_msg(msg: &crate::VehicleOdometry) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            position: [
+                msg.pose.position.x,
+                msg.pose.position.y,
+                msg.pose.position.z,
+            ],
+            orientation: [
+                msg.pose.orientation.i,
+                msg.pose.orientation.j,
+                msg.pose.orientation.k,
+                msg.pose.orientation.w,
+            ],
+            velocity: [
+                msg.twist.linear.x,
+                msg.twist.linear.y,
+                msg.twist.linear.z,
+            ],
         }
     }
 }
