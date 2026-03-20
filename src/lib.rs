@@ -210,6 +210,19 @@ pub struct AttitudeControlSetpoint {
 impl Message for AttitudeControlSetpoint {}
 
 #[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct PositionControlSetpoint {
+    pub timestamp: Instant,
+    pub position: Vector3<f32>,
+    pub velocity: Vector3<f32>,
+    pub yaw: f32,
+    pub collective_thrust_n: f32,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for PositionControlSetpoint {}
+
+#[cfg(feature = "embedded")]
 #[derive(Debug, Copy, Clone, defmt::Format)]
 pub struct NormalizedThrottle(f32);
 

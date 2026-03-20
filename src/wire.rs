@@ -28,6 +28,7 @@ pub mod msg_id {
     pub const PING_RESP: u8 = 130;
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
+    pub const POSITION_CONTROL_SETPOINT: u8 = 19;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -453,6 +454,34 @@ impl WireVehicleOdometry {
                 msg.twist.linear.y,
                 msg.twist.linear.z,
             ],
+        }
+    }
+}
+
+/// Wire position control setpoint — 40 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WirePositionControlSetpoint {
+    pub timestamp_us: u64,
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    pub yaw: f32,
+    pub collective_thrust_n: f32,
+}
+
+impl WireMessage for WirePositionControlSetpoint {
+    const MSG_ID: u8 = msg_id::POSITION_CONTROL_SETPOINT;
+}
+
+#[cfg(feature = "embedded")]
+impl WirePositionControlSetpoint {
+    pub fn from_msg(msg: &crate::PositionControlSetpoint) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            position: [msg.position.x, msg.position.y, msg.position.z],
+            velocity: [msg.velocity.x, msg.velocity.y, msg.velocity.z],
+            yaw: msg.yaw,
+            collective_thrust_n: msg.collective_thrust_n,
         }
     }
 }
