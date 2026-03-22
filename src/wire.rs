@@ -435,6 +435,7 @@ impl WireMessage for WireVehicleOdometry {
     const MSG_ID: u8 = msg_id::VEHICLE_ODOMETRY;
 }
 
+#[cfg(feature = "embedded")]
 impl WireVehicleOdometry {
     pub fn from_msg(msg: &crate::VehicleOdometry) -> Self {
         Self {
