@@ -29,6 +29,7 @@ pub mod msg_id {
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
+    pub const ACTUATOR_MOTORS: u8 = 20;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -482,6 +483,33 @@ impl WirePositionControlSetpoint {
             velocity: [msg.velocity.x, msg.velocity.y, msg.velocity.z],
             yaw: msg.yaw,
             collective_thrust_n: msg.collective_thrust_n,
+        }
+    }
+}
+
+/// Wire actuator motor commands — 24 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireActuatorMotors {
+    pub timestamp_us: u64,
+    pub motor_commands: [f32; 4], // [0.0, 1.0] per motor
+}
+
+impl WireMessage for WireActuatorMotors {
+    const MSG_ID: u8 = msg_id::ACTUATOR_MOTORS;
+}
+
+#[cfg(feature = "embedded")]
+impl WireActuatorMotors {
+    pub fn from_msg(msg: &crate::ActuatorMotors) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            motor_commands: [
+                msg.motor_commands[0].value(),
+                msg.motor_commands[1].value(),
+                msg.motor_commands[2].value(),
+                msg.motor_commands[3].value(),
+            ],
         }
     }
 }
