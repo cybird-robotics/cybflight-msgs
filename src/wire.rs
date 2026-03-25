@@ -460,7 +460,7 @@ impl WireVehicleOdometry {
     }
 }
 
-/// Wire position control setpoint — 40 bytes.
+/// Wire position control setpoint — 36 bytes.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WirePositionControlSetpoint {
@@ -468,7 +468,6 @@ pub struct WirePositionControlSetpoint {
     pub position: [f32; 3],
     pub velocity: [f32; 3],
     pub yaw: f32,
-    pub collective_thrust_n: f32,
 }
 
 impl WireMessage for WirePositionControlSetpoint {
@@ -483,7 +482,6 @@ impl WirePositionControlSetpoint {
             position: [msg.position.x, msg.position.y, msg.position.z],
             velocity: [msg.velocity.x, msg.velocity.y, msg.velocity.z],
             yaw: msg.yaw,
-            collective_thrust_n: msg.collective_thrust_n,
         }
     }
 }

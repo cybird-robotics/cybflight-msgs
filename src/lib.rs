@@ -216,12 +216,45 @@ pub struct PositionControlSetpoint {
     pub position: Vector3<f32>,
     pub velocity: Vector3<f32>,
     pub yaw: f32,
+<<<<<<< Updated upstream
     pub collective_thrust_n: f32,
+=======
+>>>>>>> Stashed changes
 }
 
 #[cfg(feature = "embedded")]
 impl Message for PositionControlSetpoint {}
 
+<<<<<<< Updated upstream
+=======
+/// NMPC control output consumed by the inner loop.
+///
+/// Carries both collective thrust + body rate (for rate PID path) and
+/// per-motor thrusts (for direct motor control path). The `direct_motor_control`
+/// flag tells the inner loop which path to use.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct NmpcControlOutput {
+    pub timestamp: Instant,
+    /// Collective thrust along body z [N].
+    pub collective_thrust_n: f32,
+    /// Desired body rate [rad/s] from NMPC predicted next state.
+    pub body_rate_rad_s: Vector3<f32>,
+    /// Desired attitude quaternion (for geometric controller).
+    pub attitude_quaternion: UnitQuaternion<f32>,
+    /// Per-motor thrusts [N] (used when direct_motor_control is true).
+    pub motor_thrusts: [f32; 4],
+    /// Whether the NMPC solver converged.
+    pub converged: bool,
+    /// true = use motor_thrusts directly (bypass rate PID + mixer),
+    /// false = use collective_thrust + body_rate through rate PID + mixer.
+    pub direct_motor_control: bool,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for NmpcControlOutput {}
+
+>>>>>>> Stashed changes
 #[cfg(feature = "embedded")]
 #[derive(Debug, Copy, Clone, defmt::Format)]
 pub struct NormalizedThrottle(f32);
@@ -294,4 +327,41 @@ pub struct StablizedControlSetpoint {
 
 #[cfg(feature = "embedded")]
 impl Message for StablizedControlSetpoint {}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+/// Maximum number of target positions in a waypoint sequence.
+///
+/// Must be `<= cybflight_core::trajectory_planning::MAX_PIECES` — the planner
+/// uses the last target as the tail and all preceding targets as intermediate
+/// waypoints, producing `num_targets` polynomial pieces.
+pub const MAX_NAV_WAYPOINTS: usize = 16;
+
+/// Navigation command type: single position or waypoint sequence.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub enum NavigationCommandType {
+    /// Go to a single position. Planner decides if trajectory is needed.
+    GoToPosition {
+        position: Vector3<f32>,
+        yaw: f32,
+    },
+    /// Follow a waypoint sequence through all points.
+    WaypointSequence {
+        waypoints: [Vector3<f32>; MAX_NAV_WAYPOINTS],
+        num_waypoints: u8,
+        yaw: f32,
+    },
+}
+
+/// Navigation command from ground station or RC interpreter.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct NavigationCommand {
+    pub timestamp: Instant,
+    pub command: NavigationCommandType,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for NavigationCommand {}
 
