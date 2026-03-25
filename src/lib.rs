@@ -216,17 +216,11 @@ pub struct PositionControlSetpoint {
     pub position: Vector3<f32>,
     pub velocity: Vector3<f32>,
     pub yaw: f32,
-<<<<<<< Updated upstream
-    pub collective_thrust_n: f32,
-=======
->>>>>>> Stashed changes
 }
 
 #[cfg(feature = "embedded")]
 impl Message for PositionControlSetpoint {}
 
-<<<<<<< Updated upstream
-=======
 /// NMPC control output consumed by the inner loop.
 ///
 /// Carries both collective thrust + body rate (for rate PID path) and
@@ -254,7 +248,6 @@ pub struct NmpcControlOutput {
 #[cfg(feature = "embedded")]
 impl Message for NmpcControlOutput {}
 
->>>>>>> Stashed changes
 #[cfg(feature = "embedded")]
 #[derive(Debug, Copy, Clone, defmt::Format)]
 pub struct NormalizedThrottle(f32);
