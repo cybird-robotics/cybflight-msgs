@@ -30,6 +30,7 @@ pub mod msg_id {
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
     pub const ACTUATOR_MOTORS: u8 = 20;
+    pub const GNSS_STATUS: u8 = 21;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -37,7 +38,7 @@ pub mod msg_id {
 }
 
 /// Maximum wire payload size in bytes.
-pub const MAX_WIRE_PAYLOAD: usize = 64;
+pub const MAX_WIRE_PAYLOAD: usize = 128;
 /// Frame header size: [msg_id: u8][seq: u8].
 pub const FRAME_HEADER_SIZE: usize = 2;
 /// Maximum raw (pre-COBS) frame size.
@@ -509,6 +510,110 @@ impl WireActuatorMotors {
                 msg.motor_commands[2].value(),
                 msg.motor_commands[3].value(),
             ],
+        }
+    }
+}
+
+/// Wire GNSS/INS status (APX-15) — 102 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireGnssStatus {
+    pub timestamp_us: u64,          // 8
+
+    // From #49 (InsFullNav) — status bytes
+    pub imu_alignment: u8,          // 1
+    pub gps_quality: u8,            // 1
+
+    // From #50 (InsRmsInfo) — position, velocity, attitude RMS
+    pub north_pos_rms: f32,         // 4
+    pub east_pos_rms: f32,          // 4
+    pub down_pos_rms: f32,          // 4
+    pub north_vel_rms: f32,         // 4
+    pub east_vel_rms: f32,          // 4
+    pub down_vel_rms: f32,          // 4
+    pub roll_rms: f32,              // 4
+    pub pitch_rms: f32,             // 4
+    pub heading_rms: f32,           // 4
+
+    // From #12 (PositionSigmaInfo)
+    pub sigma_east: f32,            // 4
+    pub sigma_north: f32,           // 4
+    pub sigma_up: f32,              // 4
+
+    // From #1 (PositionTime)
+    pub num_svs: u8,                // 1
+    pub pos_flags1: u8,             // 1
+    pub pos_flags2: u8,             // 1
+
+    // From #38 (PositionTypeInfo)
+    pub solution_flags: u8,         // 1
+    pub rtk_condition: u8,          // 1
+    pub correction_age: f32,        // 4
+    pub network_flags: u8,          // 1
+    pub position_fix_type: u8,      // 1
+
+    // From #9 (PdopInfo)
+    pub pdop: f32,                  // 4
+    pub hdop: f32,                  // 4
+    pub vdop: f32,                  // 4
+    pub tdop: f32,                  // 4
+
+    // From #35 (ReceivedBaseInfo)
+    pub base_id: u16,               // 2
+
+    // From #40 (LbandStatus)
+    pub lband_snr: f32,             // 4
+    pub lband_hp_xp_mode: u8,       // 1
+    pub lband_vbs_mode: u8,         // 1
+
+    // From #10 (ClockInfo)
+    pub clock_flags: u8,            // 1
+    pub clock_offset_ms: f32,       // 4
+    pub freq_offset_ppm: f32,       // 4
+}
+
+impl WireMessage for WireGnssStatus {
+    const MSG_ID: u8 = msg_id::GNSS_STATUS;
+}
+
+#[cfg(feature = "embedded")]
+impl WireGnssStatus {
+    pub fn from_msg(msg: &crate::GnssStatus) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            imu_alignment: msg.imu_alignment,
+            gps_quality: msg.gps_quality,
+            north_pos_rms: msg.north_pos_rms,
+            east_pos_rms: msg.east_pos_rms,
+            down_pos_rms: msg.down_pos_rms,
+            north_vel_rms: msg.north_vel_rms,
+            east_vel_rms: msg.east_vel_rms,
+            down_vel_rms: msg.down_vel_rms,
+            roll_rms: msg.roll_rms,
+            pitch_rms: msg.pitch_rms,
+            heading_rms: msg.heading_rms,
+            sigma_east: msg.sigma_east,
+            sigma_north: msg.sigma_north,
+            sigma_up: msg.sigma_up,
+            num_svs: msg.num_svs,
+            pos_flags1: msg.pos_flags1,
+            pos_flags2: msg.pos_flags2,
+            solution_flags: msg.solution_flags,
+            rtk_condition: msg.rtk_condition,
+            correction_age: msg.correction_age,
+            network_flags: msg.network_flags,
+            position_fix_type: msg.position_fix_type,
+            pdop: msg.pdop,
+            hdop: msg.hdop,
+            vdop: msg.vdop,
+            tdop: msg.tdop,
+            base_id: msg.base_id,
+            lband_snr: msg.lband_snr,
+            lband_hp_xp_mode: msg.lband_hp_xp_mode,
+            lband_vbs_mode: msg.lband_vbs_mode,
+            clock_flags: msg.clock_flags,
+            clock_offset_ms: msg.clock_offset_ms,
+            freq_offset_ppm: msg.freq_offset_ppm,
         }
     }
 }

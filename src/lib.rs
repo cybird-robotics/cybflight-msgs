@@ -358,3 +358,70 @@ pub struct NavigationCommand {
 #[cfg(feature = "embedded")]
 impl Message for NavigationCommand {}
 
+// ── GNSS Status (APX-15 INS) ───────────────────────────────────────────────
+
+/// Comprehensive GNSS/INS status from APX-15 for go/no-go decision making.
+///
+/// Carries quality indicators from GSOF messages #49, #50, #12, #1, #38,
+/// #9, #35, #40, #10 needed to determine whether the INS solution is
+/// usable for flight.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct GnssStatus {
+    pub timestamp: Instant,
+
+    // From #49 (InsFullNav) — status bytes
+    pub imu_alignment: u8,
+    pub gps_quality: u8,
+
+    // From #50 (InsRmsInfo) — position, velocity, attitude RMS
+    pub north_pos_rms: f32,
+    pub east_pos_rms: f32,
+    pub down_pos_rms: f32,
+    pub north_vel_rms: f32,
+    pub east_vel_rms: f32,
+    pub down_vel_rms: f32,
+    pub roll_rms: f32,
+    pub pitch_rms: f32,
+    pub heading_rms: f32,
+
+    // From #12 (PositionSigmaInfo)
+    pub sigma_east: f32,
+    pub sigma_north: f32,
+    pub sigma_up: f32,
+
+    // From #1 (PositionTime)
+    pub num_svs: u8,
+    pub pos_flags1: u8,
+    pub pos_flags2: u8,
+
+    // From #38 (PositionTypeInfo)
+    pub solution_flags: u8,
+    pub rtk_condition: u8,
+    pub correction_age: f32,
+    pub network_flags: u8,
+    pub position_fix_type: u8,
+
+    // From #9 (PdopInfo)
+    pub pdop: f32,
+    pub hdop: f32,
+    pub vdop: f32,
+    pub tdop: f32,
+
+    // From #35 (ReceivedBaseInfo)
+    pub base_id: u16,
+
+    // From #40 (LbandStatus)
+    pub lband_snr: f32,
+    pub lband_hp_xp_mode: u8,
+    pub lband_vbs_mode: u8,
+
+    // From #10 (ClockInfo)
+    pub clock_flags: u8,
+    pub clock_offset_ms: f32,
+    pub freq_offset_ppm: f32,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for GnssStatus {}
+
