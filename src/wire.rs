@@ -31,6 +31,7 @@ pub mod msg_id {
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
     pub const ACTUATOR_MOTORS: u8 = 20;
     pub const GNSS_STATUS: u8 = 21;
+    pub const MISSION_STATUS: u8 = 22;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -614,6 +615,44 @@ impl WireGnssStatus {
             clock_flags: msg.clock_flags,
             clock_offset_ms: msg.clock_offset_ms,
             freq_offset_ppm: msg.freq_offset_ppm,
+        }
+    }
+}
+
+/// Wire mission status — 25 bytes.
+///
+/// `state` encodes `MissionState` (0=Idle, 1=Planning, 2=Executing).
+/// `tau_s` is elapsed trajectory time; for Idle/Planning both `tau_s` and
+/// `total_duration_s` are 0. `target_position` is the position the outer
+/// loop is currently tracking (trajectory sample at τ₀ while Executing,
+/// hover setpoint otherwise).
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireMissionStatus {
+    pub timestamp_us: u64,
+    pub state: u8,
+    pub tau_s: f32,
+    pub total_duration_s: f32,
+    pub target_position: [f32; 3],
+}
+
+impl WireMessage for WireMissionStatus {
+    const MSG_ID: u8 = msg_id::MISSION_STATUS;
+}
+
+#[cfg(feature = "embedded")]
+impl WireMissionStatus {
+    pub fn from_msg(msg: &crate::MissionStatus) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            state: msg.state,
+            tau_s: msg.tau_s,
+            total_duration_s: msg.total_duration_s,
+            target_position: [
+                msg.target_position.x,
+                msg.target_position.y,
+                msg.target_position.z,
+            ],
         }
     }
 }

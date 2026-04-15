@@ -221,6 +221,19 @@ pub struct PositionControlSetpoint {
 #[cfg(feature = "embedded")]
 impl Message for PositionControlSetpoint {}
 
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct MissionStatus {
+    pub timestamp: Instant,
+    pub state: u8,
+    pub tau_s: f32,
+    pub total_duration_s: f32,
+    pub target_position: Vector3<f32>,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for MissionStatus {}
+
 /// NMPC control output consumed by the inner loop.
 ///
 /// Carries both collective thrust + body rate (for rate PID path) and
