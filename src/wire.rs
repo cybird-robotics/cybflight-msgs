@@ -634,6 +634,27 @@ pub struct WireMissionStatus {
     pub tau_s: f32,
     pub total_duration_s: f32,
     pub target_position: [f32; 3],
+
+    // ── Solve diagnostics (see `crate::SolveDiagnostics`) ──
+    /// `SolverStatus` as a byte, or `crate::SOLVE_STATUS_NONE = 0xFF`
+    /// when no solve has completed yet (Planning heartbeat / Idle).
+    pub solve_status: u8,
+    /// BFGS outer iterations consumed.
+    pub solve_iterations: u16,
+    /// Wall-clock solve duration in milliseconds.
+    pub solve_time_ms: u16,
+    /// Number of polynomial pieces in the published trajectory.
+    pub solve_num_pieces: u8,
+    /// Pre-BFGS initial time allocation (sum of seed segment times).
+    pub solve_init_duration_s: f32,
+    /// Final optimized cost value.
+    pub solve_final_cost: f32,
+    /// Peak ‖v‖ sampled across the published trajectory (m/s).
+    pub solve_peak_vel_m_s: f32,
+    /// Planner-side reject reason — see `crate::SOLVE_REJECT_*`. Zero on
+    /// the happy path; non-zero identifies why a Planning → Idle
+    /// transition fired without the mission reaching Executing.
+    pub solve_reject_reason: u8,
 }
 
 impl WireMessage for WireMissionStatus {
@@ -653,6 +674,14 @@ impl WireMissionStatus {
                 msg.target_position.y,
                 msg.target_position.z,
             ],
+            solve_status: msg.solve.status,
+            solve_iterations: msg.solve.iterations,
+            solve_time_ms: msg.solve.solve_time_ms,
+            solve_num_pieces: msg.solve.num_pieces,
+            solve_init_duration_s: msg.solve.init_duration_s,
+            solve_final_cost: msg.solve.final_cost,
+            solve_peak_vel_m_s: msg.solve.peak_vel_m_s,
+            solve_reject_reason: msg.solve.reject_reason,
         }
     }
 }

@@ -221,6 +221,89 @@ pub struct PositionControlSetpoint {
 #[cfg(feature = "embedded")]
 impl Message for PositionControlSetpoint {}
 
+/// Per-solve diagnostics carried alongside [`MissionStatus`].
+///
+/// Populated once by the mission planner when it finalizes a trajectory
+/// and then propagated verbatim through every Executing-state tick so the
+/// ground station can inspect the *last* solve at any point during flight.
+/// For Planning-state heartbeats and Idle (no solve ever completed),
+/// `status == SOLVE_STATUS_NONE` and the rest of the fields are zero.
+#[cfg(feature = "embedded")]
+#[derive(Clone, Copy, defmt::Format)]
+pub struct SolveDiagnostics {
+    /// `SolverStatus` as a byte. See [`SOLVE_STATUS_*`](SOLVE_STATUS_CONVERGENCE).
+    pub status: u8,
+    /// BFGS outer iterations consumed by the solve.
+    pub iterations: u16,
+    /// Wall-clock solve duration in milliseconds.
+    pub solve_time_ms: u16,
+    /// Number of polynomial pieces in the published trajectory.
+    pub num_pieces: u8,
+    /// Pre-BFGS sum of segment times (initial time allocation). Compare
+    /// against `total_duration_s` to see how much the optimizer actually
+    /// compressed the trajectory — ratio ≈ 1 means BFGS made no progress.
+    pub init_duration_s: f32,
+    /// Final optimized cost value.
+    pub final_cost: f32,
+    /// Peak ‖v‖ sampled across the published trajectory (m/s).
+    pub peak_vel_m_s: f32,
+    /// Planner-side reject reason. `SOLVE_REJECT_NONE` on the happy path;
+    /// any non-zero value is a breadcrumb explaining why a Planning →
+    /// Idle transition occurred without reaching Executing.
+    pub reject_reason: u8,
+}
+
+/// Sentinel: no solve has completed yet (Planning heartbeat / Idle state).
+pub const SOLVE_STATUS_NONE: u8 = 0xFF;
+/// `SolverStatus::Convergence`.
+pub const SOLVE_STATUS_CONVERGENCE: u8 = 0;
+/// `SolverStatus::Stop`.
+pub const SOLVE_STATUS_STOP: u8 = 1;
+/// `SolverStatus::MaxIterations`.
+pub const SOLVE_STATUS_MAX_ITERATIONS: u8 = 2;
+/// `SolverStatus::InvalidValue`.
+pub const SOLVE_STATUS_INVALID_VALUE: u8 = 3;
+/// `SolverStatus::TimeExceeded`.
+pub const SOLVE_STATUS_TIME_EXCEEDED: u8 = 4;
+
+/// No reject — the happy path, or a state other than a fresh reject
+/// transition.
+pub const SOLVE_REJECT_NONE: u8 = 0;
+/// Wall-clock `SOLVE_BUDGET` elapsed before the solver converged.
+pub const SOLVE_REJECT_BUDGET_EXCEEDED: u8 = 1;
+/// `IS_ARMED` cleared mid-solve — pilot disarmed before the plan landed.
+pub const SOLVE_REJECT_DISARMED: u8 = 2;
+/// Solver converged to a numerically-invalid iterate: non-finite cost,
+/// `dur` out of `[MIN, MAX]`, or `InvalidValue` status.
+pub const SOLVE_REJECT_INVALID: u8 = 3;
+/// Optimised duration is ≥ 90% of the initial time allocation, meaning
+/// BFGS failed to meaningfully compress the seed trajectory.
+pub const SOLVE_REJECT_UNDER_COMPRESSED: u8 = 4;
+/// Pilot released the mission switch during the solve.
+pub const SOLVE_REJECT_USER_ABORT: u8 = 5;
+/// `MISSION_STATE` was changed externally (failsafe, abort handler) while
+/// the solver was running — trajectory discarded.
+pub const SOLVE_REJECT_STATE_CHANGED: u8 = 6;
+/// Race detected inside the publish critical section (abort flag flipped
+/// or state changed between the check and the slot write).
+pub const SOLVE_REJECT_PUBLISH_RACE: u8 = 7;
+
+#[cfg(feature = "embedded")]
+impl SolveDiagnostics {
+    /// All-zero / no-solve-yet sentinel. Use for Planning heartbeats and
+    /// any other publish site that has no solver result to report.
+    pub const NONE: Self = Self {
+        status: SOLVE_STATUS_NONE,
+        iterations: 0,
+        solve_time_ms: 0,
+        num_pieces: 0,
+        init_duration_s: 0.0,
+        final_cost: 0.0,
+        peak_vel_m_s: 0.0,
+        reject_reason: SOLVE_REJECT_NONE,
+    };
+}
+
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct MissionStatus {
@@ -229,6 +312,8 @@ pub struct MissionStatus {
     pub tau_s: f32,
     pub total_duration_s: f32,
     pub target_position: Vector3<f32>,
+    /// Diagnostics from the most recent solve. See [`SolveDiagnostics`].
+    pub solve: SolveDiagnostics,
 }
 
 #[cfg(feature = "embedded")]
@@ -348,10 +433,7 @@ pub const MAX_NAV_WAYPOINTS: usize = 16;
 #[derive(Clone, defmt::Format)]
 pub enum NavigationCommandType {
     /// Go to a single position. Planner decides if trajectory is needed.
-    GoToPosition {
-        position: Vector3<f32>,
-        yaw: f32,
-    },
+    GoToPosition { position: Vector3<f32>, yaw: f32 },
     /// Follow a waypoint sequence through all points.
     WaypointSequence {
         waypoints: [Vector3<f32>; MAX_NAV_WAYPOINTS],
@@ -437,4 +519,3 @@ pub struct GnssStatus {
 
 #[cfg(feature = "embedded")]
 impl Message for GnssStatus {}
-
