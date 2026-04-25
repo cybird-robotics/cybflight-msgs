@@ -723,11 +723,12 @@ pub struct WireEstimatorStatus {
     pub gate_rejects_att: u32,
     pub gate_rejects_baro: u32,
     pub gate_rejects_mag: u32,
-    /// Seconds since the most recent position update (mocap or GPS).
-    /// `f32::INFINITY` when no update has ever been received.
+    /// `f32::INFINITY` until the first update arrives.
     pub seconds_since_last_pos_update: f32,
     pub phase: u8,
-    pub _pad: [u8; 3],
+    /// AHRS supervisor mode: 0 = Normal, 1 = AttitudeRateFallback, 2 = Disarmed.
+    pub ahrs_mode: u8,
+    pub _pad: [u8; 2],
 }
 
 impl WireMessage for WireEstimatorStatus {
