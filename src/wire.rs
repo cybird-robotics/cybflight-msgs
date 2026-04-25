@@ -32,6 +32,7 @@ pub mod msg_id {
     pub const ACTUATOR_MOTORS: u8 = 20;
     pub const GNSS_STATUS: u8 = 21;
     pub const MISSION_STATUS: u8 = 22;
+    pub const ESTIMATOR_STATUS: u8 = 23;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -684,6 +685,53 @@ impl WireMissionStatus {
             solve_reject_reason: msg.solve.reject_reason,
         }
     }
+}
+
+/// Wire ESKF state-estimator status — 80 bytes.
+///
+/// Reports filter health for the firmware-side ESKF: lifecycle phase,
+/// fault bitflags, attitude (Euler), per-channel covariance traces, last
+/// NIS values, cumulative gate-rejection counters, and time-since-last
+/// position-update for staleness watchdogs. Cadence ~5 Hz from the
+/// firmware (the ESP bridge subdivides its 100 Hz TX tick).
+///
+/// `phase` mirrors `EstimatorPhase` ordinal: 0 = AwaitingExteroceptive,
+/// 1 = Converging, 2 = Running.
+///
+/// `fault_flags` mirrors the firmware-side `EskfFault` bitset; consumers
+/// should treat unrecognised bits as opaque "something is wrong".
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireEstimatorStatus {
+    pub timestamp_us: u64,
+    pub fault_flags: u32,
+    pub roll_deg: f32,
+    pub pitch_deg: f32,
+    pub yaw_deg: f32,
+    /// Sum of position-covariance diagonal entries [m²].
+    pub pos_cov_trace: f32,
+    /// Sum of velocity-covariance diagonal entries [m²/s²].
+    pub vel_cov_trace: f32,
+    /// Sum of gyro-bias covariance diagonal entries [rad²/s²].
+    pub gyro_bias_cov_trace: f32,
+    pub last_nis_pos: f32,
+    pub last_nis_vel: f32,
+    pub last_nis_att: f32,
+    pub nan_resets: u32,
+    pub gate_rejects_pos: u32,
+    pub gate_rejects_vel: u32,
+    pub gate_rejects_att: u32,
+    pub gate_rejects_baro: u32,
+    pub gate_rejects_mag: u32,
+    /// Seconds since the most recent position update (mocap or GPS).
+    /// `f32::INFINITY` when no update has ever been received.
+    pub seconds_since_last_pos_update: f32,
+    pub phase: u8,
+    pub _pad: [u8; 3],
+}
+
+impl WireMessage for WireEstimatorStatus {
+    const MSG_ID: u8 = msg_id::ESTIMATOR_STATUS;
 }
 
 // ---------------------------------------------------------------------------
