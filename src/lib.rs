@@ -142,6 +142,24 @@ pub struct DshotTelemetry {
 impl Message for DshotTelemetry {}
 
 #[cfg(feature = "embedded")]
+#[derive(Clone, Copy, defmt::Format)]
+pub struct MotorDynamicsTelemetry {
+    pub omega: f32,
+    pub omega_dot: f32,
+    pub raw: Option<f32>,
+}
+
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct MotorStateTelemetry {
+    pub timestamp: Instant,
+    pub motors: [MotorDynamicsTelemetry; 4],
+}
+#[cfg(feature = "embedded")]
+impl Message for MotorStateTelemetry {}
+
+
+#[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct GpsFix {
     pub timestamp: Instant,

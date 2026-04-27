@@ -33,6 +33,7 @@ pub mod msg_id {
     pub const GNSS_STATUS: u8 = 21;
     pub const MISSION_STATUS: u8 = 22;
     pub const ESTIMATOR_STATUS: u8 = 23;
+    pub const MOTOR_STATE_TELEMETRY: u8 = 24;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -211,6 +212,45 @@ impl WireDshotTelemetry {
         Self {
             timestamp_us: msg.timestamp.as_micros(),
             erpm,
+            raw,
+        }
+    }
+}
+
+/// Wire motor state telemetry — 56 bytes.
+///
+/// Per-motor angular velocity (`omega`, rad/s) and angular acceleration
+/// (`omega_dot`, rad/s²). `raw` carries the upstream raw sample (e.g. the
+/// pre-filter eRPM-derived value); flattened to `0.0` when absent on the
+/// channel side (mirrors `WireDshotTelemetry`).
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireMotorStateTelemetry {
+    pub timestamp_us: u64,
+    pub omega: [f32; 4],
+    pub omega_dot: [f32; 4],
+    pub raw: [f32; 4],
+}
+
+impl WireMessage for WireMotorStateTelemetry {
+    const MSG_ID: u8 = msg_id::MOTOR_STATE_TELEMETRY;
+}
+
+#[cfg(feature = "embedded")]
+impl WireMotorStateTelemetry {
+    pub fn from_msg(msg: &crate::MotorStateTelemetry) -> Self {
+        let mut omega = [0.0f32; 4];
+        let mut omega_dot = [0.0f32; 4];
+        let mut raw = [0.0f32; 4];
+        for (i, m) in msg.motors.iter().enumerate() {
+            omega[i] = m.omega;
+            omega_dot[i] = m.omega_dot;
+            raw[i] = m.raw.unwrap_or(0.0);
+        }
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            omega,
+            omega_dot,
             raw,
         }
     }
