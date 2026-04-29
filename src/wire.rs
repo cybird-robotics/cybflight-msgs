@@ -34,6 +34,7 @@ pub mod msg_id {
     pub const MISSION_STATUS: u8 = 22;
     pub const ESTIMATOR_STATUS: u8 = 23;
     pub const MOTOR_STATE_TELEMETRY: u8 = 24;
+    pub const POWER_STATUS: u8 = 25;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -373,6 +374,40 @@ impl WireBaroSample {
             timestamp_us: msg.timestamp.as_micros(),
             pressure_pa: msg.pressure_pa,
             temp_c: msg.temp_c,
+        }
+    }
+}
+
+/// Wire battery / current monitor status — 20 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WirePowerStatus {
+    pub timestamp_us: u64,
+    /// Battery voltage in centivolts (0.01 V).
+    pub voltage_cv: u16,
+    /// Current draw in centiamps (0.01 A).
+    pub current_ca: i32,
+    /// Milliamp-hours consumed since power-on.
+    pub mah_drawn: u32,
+    /// Detected cell count (0 = no battery).
+    pub cell_count: u8,
+    pub _pad: u8,
+}
+
+impl WireMessage for WirePowerStatus {
+    const MSG_ID: u8 = msg_id::POWER_STATUS;
+}
+
+#[cfg(feature = "embedded")]
+impl WirePowerStatus {
+    pub fn from_msg(msg: &crate::PowerStatus) -> Self {
+        Self {
+            timestamp_us: msg.timestamp.as_micros(),
+            voltage_cv: msg.voltage_cv,
+            current_ca: msg.current_ca,
+            mah_drawn: msg.mah_drawn,
+            cell_count: msg.cell_count,
+            _pad: 0,
         }
     }
 }

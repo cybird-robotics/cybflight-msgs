@@ -201,6 +201,23 @@ pub struct BaroSample {
 impl Message for BaroSample {}
 
 #[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct PowerStatus {
+    pub timestamp: Instant,
+    /// Battery voltage in centivolts (0.01 V).
+    pub voltage_cv: u16,
+    /// Current draw in centiamps (0.01 A).
+    pub current_ca: i32,
+    /// Milliamp-hours consumed since power-on.
+    pub mah_drawn: u32,
+    /// Detected cell count (0 = no battery).
+    pub cell_count: u8,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for PowerStatus {}
+
+#[cfg(feature = "embedded")]
 const OCP_OUTPUT_SIZE: usize = 4;
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
