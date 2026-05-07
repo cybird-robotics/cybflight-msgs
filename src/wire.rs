@@ -35,6 +35,14 @@ pub mod msg_id {
     pub const ESTIMATOR_STATUS: u8 = 23;
     pub const MOTOR_STATE_TELEMETRY: u8 = 24;
     pub const POWER_STATUS: u8 = 25;
+    /// Aggregate ESKF / failsafe / sensor-health snapshot. Mirrors
+    /// the live `health` shell command and the blackbox `/health`
+    /// topic. Downlinked at 1 Hz by `comm::esp_bridge`.
+    pub const SYSTEM_HEALTH: u8 = 26;
+    /// Flat snapshot of `GpsHealth` + the latest NAV-PVT accuracy
+    /// fields. Mirrors the live `gpshealth` shell command and the
+    /// blackbox `/gps_health` topic. Downlinked at 1 Hz.
+    pub const GPS_HEALTH: u8 = 27;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -529,11 +537,7 @@ impl WireVehicleOdometry {
                 msg.pose.orientation.k,
                 msg.pose.orientation.w,
             ],
-            velocity: [
-                msg.twist.linear.x,
-                msg.twist.linear.y,
-                msg.twist.linear.z,
-            ],
+            velocity: [msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z],
         }
     }
 }
@@ -595,58 +599,58 @@ impl WireActuatorMotors {
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WireGnssStatus {
-    pub timestamp_us: u64,          // 8
+    pub timestamp_us: u64, // 8
 
     // From #49 (InsFullNav) — status bytes
-    pub imu_alignment: u8,          // 1
-    pub gps_quality: u8,            // 1
+    pub imu_alignment: u8, // 1
+    pub gps_quality: u8,   // 1
 
     // From #50 (InsRmsInfo) — position, velocity, attitude RMS
-    pub north_pos_rms: f32,         // 4
-    pub east_pos_rms: f32,          // 4
-    pub down_pos_rms: f32,          // 4
-    pub north_vel_rms: f32,         // 4
-    pub east_vel_rms: f32,          // 4
-    pub down_vel_rms: f32,          // 4
-    pub roll_rms: f32,              // 4
-    pub pitch_rms: f32,             // 4
-    pub heading_rms: f32,           // 4
+    pub north_pos_rms: f32, // 4
+    pub east_pos_rms: f32,  // 4
+    pub down_pos_rms: f32,  // 4
+    pub north_vel_rms: f32, // 4
+    pub east_vel_rms: f32,  // 4
+    pub down_vel_rms: f32,  // 4
+    pub roll_rms: f32,      // 4
+    pub pitch_rms: f32,     // 4
+    pub heading_rms: f32,   // 4
 
     // From #12 (PositionSigmaInfo)
-    pub sigma_east: f32,            // 4
-    pub sigma_north: f32,           // 4
-    pub sigma_up: f32,              // 4
+    pub sigma_east: f32,  // 4
+    pub sigma_north: f32, // 4
+    pub sigma_up: f32,    // 4
 
     // From #1 (PositionTime)
-    pub num_svs: u8,                // 1
-    pub pos_flags1: u8,             // 1
-    pub pos_flags2: u8,             // 1
+    pub num_svs: u8,    // 1
+    pub pos_flags1: u8, // 1
+    pub pos_flags2: u8, // 1
 
     // From #38 (PositionTypeInfo)
-    pub solution_flags: u8,         // 1
-    pub rtk_condition: u8,          // 1
-    pub correction_age: f32,        // 4
-    pub network_flags: u8,          // 1
-    pub position_fix_type: u8,      // 1
+    pub solution_flags: u8,    // 1
+    pub rtk_condition: u8,     // 1
+    pub correction_age: f32,   // 4
+    pub network_flags: u8,     // 1
+    pub position_fix_type: u8, // 1
 
     // From #9 (PdopInfo)
-    pub pdop: f32,                  // 4
-    pub hdop: f32,                  // 4
-    pub vdop: f32,                  // 4
-    pub tdop: f32,                  // 4
+    pub pdop: f32, // 4
+    pub hdop: f32, // 4
+    pub vdop: f32, // 4
+    pub tdop: f32, // 4
 
     // From #35 (ReceivedBaseInfo)
-    pub base_id: u16,               // 2
+    pub base_id: u16, // 2
 
     // From #40 (LbandStatus)
-    pub lband_snr: f32,             // 4
-    pub lband_hp_xp_mode: u8,       // 1
-    pub lband_vbs_mode: u8,         // 1
+    pub lband_snr: f32,       // 4
+    pub lband_hp_xp_mode: u8, // 1
+    pub lband_vbs_mode: u8,   // 1
 
     // From #10 (ClockInfo)
-    pub clock_flags: u8,            // 1
-    pub clock_offset_ms: f32,       // 4
-    pub freq_offset_ppm: f32,       // 4
+    pub clock_flags: u8,      // 1
+    pub clock_offset_ms: f32, // 4
+    pub freq_offset_ppm: f32, // 4
 }
 
 impl WireMessage for WireGnssStatus {
@@ -907,4 +911,105 @@ pub struct WireTimeSyncStatus {
 
 impl WireMessage for WireTimeSyncStatus {
     const MSG_ID: u8 = msg_id::TIME_SYNC_STATUS;
+}
+
+// ── Health snapshots ──────────────────────────────────────────────────────
+//
+// Both types mirror the live shell (`health` / `gpshealth`) and the
+// matching blackbox topics. The firmware's `comm::esp_bridge` snapshots
+// them at 1 Hz off the same atomics the shell reads, so a wire frame and
+// a contemporaneous BB record agree by construction. The GCS dashboard
+// renders these in a view-only TUI pane.
+//
+// Stable on the wire — never renumber. Field additions go at the end of
+// the struct (and are zero-filled on older firmware via the `from_bytes`
+// length check).
+
+/// Aggregate ESKF / failsafe / sensor-health snapshot — 76 bytes.
+///
+/// Booleans are `u8` to keep the layout fully POD. `last_*_update_age_ms`
+/// is pre-subtracted from "now" on the firmware side; `u32::MAX` encodes
+/// "never accepted". `_pad` keeps the trailing struct on a 4-byte
+/// boundary; readers must ignore.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireSystemHealth {
+    pub timestamp_us: u64,
+    pub estimator_faults: u32,
+    pub nan_resets: u32,
+    pub gate_rejects_pos: u32,
+    pub gate_rejects_vel: u32,
+    pub gate_rejects_att: u32,
+    /// Age in ms of the last accepted pos/vel/att update. `u32::MAX` =
+    /// never. Disambiguates POS_STALE-from-no-data vs
+    /// POS_STALE-from-rejection: a frozen value means upstream stopped
+    /// delivering; a recent one means the guard is rejecting fresh
+    /// measurements.
+    pub last_pos_update_age_ms: u32,
+    pub last_vel_update_age_ms: u32,
+    pub last_att_update_age_ms: u32,
+    pub last_nis_pos: f32,
+    pub last_nis_vel: f32,
+    pub last_nis_att: f32,
+    pub failsafe_active: u8,
+    pub estimator_ready: u8,
+    pub eskf_degraded: u8,
+    pub eskf_severe_fault: u8,
+    pub attitude_health: u8,
+    pub _pad: [u8; 3],
+}
+
+impl WireMessage for WireSystemHealth {
+    const MSG_ID: u8 = msg_id::SYSTEM_HEALTH;
+}
+
+// ── GpsHealth state / err_kind encoding ───────────────────────────────────
+//
+// Stable on disk; never renumber.
+
+pub const GPS_STATE_NOT_CONFIGURED: u8 = 0;
+pub const GPS_STATE_INITIALIZING: u8 = 1;
+pub const GPS_STATE_UART_INIT_FAILED: u8 = 2;
+pub const GPS_STATE_INIT_TIMED_OUT: u8 = 3;
+pub const GPS_STATE_INIT_FAILED: u8 = 4;
+pub const GPS_STATE_WAITING: u8 = 5;
+pub const GPS_STATE_LOCKED: u8 = 6;
+pub const GPS_STATE_READ_ERROR: u8 = 7;
+
+pub const GPS_ERR_NONE: u8 = 0;
+pub const GPS_ERR_IO: u8 = 1;
+pub const GPS_ERR_BAD_CHECKSUM: u8 = 2;
+pub const GPS_ERR_NAK: u8 = 3;
+pub const GPS_ERR_TIMEOUT: u8 = 4;
+
+/// Flat snapshot of `GpsHealth` + the latest NAV-PVT accuracy fields —
+/// 36 bytes.
+///
+/// Variant fields the active state doesn't define are zero (or
+/// `u32::MAX` for `last_fix_age_ms`/`nav_pvt_age_ms` to disambiguate
+/// "absent" from "0 ms old"). See [`GPS_STATE_*`](GPS_STATE_NOT_CONFIGURED)
+/// and [`GPS_ERR_*`](GPS_ERR_NONE) for the encoding tables.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireGpsHealth {
+    pub timestamp_us: u64,
+    pub h_acc_mm: u32,
+    pub v_acc_mm: u32,
+    pub s_acc_mm_s: u32,
+    /// `u32::MAX` when state != Locked.
+    pub last_fix_age_ms: u32,
+    /// `u32::MAX` when no NAV-PVT has ever been received.
+    pub nav_pvt_age_ms: u32,
+    pub state: u8,
+    pub err_kind: u8,
+    pub fix_type: u8,
+    pub num_sv: u8,
+    pub diff_soln: u8,
+    pub carr_soln: u8,
+    pub gnss_fix_ok: u8,
+    pub _pad: u8,
+}
+
+impl WireMessage for WireGpsHealth {
+    const MSG_ID: u8 = msg_id::GPS_HEALTH;
 }

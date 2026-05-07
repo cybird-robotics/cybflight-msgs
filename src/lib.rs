@@ -411,6 +411,50 @@ pub struct ActuatorMotors {
     pub motor_commands: [NormalizedThrottle; 4],
 }
 
+/// Per-tick tracking error reported directly by whichever controller
+/// just ran. Each source publishes only the fields it computes; the
+/// remaining fields are zero. Distinguished by [`source`](Self::source):
+///
+/// - [`TRACKING_ERROR_SOURCE_CASCADE`] (0): cascade outer loop. Fills
+///   `pos_err` and `vel_err` (raw `reference - actual`, *before* the
+///   controller's `p_err_max`/`v_err_max` clamp). Pair with the
+///   controller's known clamp limits at decode time to spot
+///   saturation. Attitude / rate err are zero — cascade hands
+///   attitude downstream to the geometric controller, and rate-
+///   tracking is INDI's domain.
+/// - [`TRACKING_ERROR_SOURCE_MPC`] (1): MPC outer loop. Fills `pos_err`,
+///   `vel_err` (raw `xref - x` since MPC enforces error envelope
+///   through cost weights, not clamps), and `attitude_err` — the
+///   tilt-prioritizing 3-vec from
+///   `cybflight_core::mpc::model_utils::attitude_error`. Body-rate err
+///   is zero — MPC commands rates downstream rather than tracking
+///   them.
+/// - [`TRACKING_ERROR_SOURCE_INDI`] (2): INDI inner loop. Fills
+///   `body_rate_err` (= `rate_ref - gyro_corrected`) only. Position /
+///   velocity / attitude err are zero — INDI sees neither.
+///
+/// All errors are in the **world frame** for pos/vel, **body frame**
+/// for attitude (tilt-prio Euler-like 3-vec) and rate. Sign convention:
+/// `error = reference - actual`, so a positive `pos_err.x` means the
+/// reference is *ahead* of the vehicle along world-x.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct TrackingError {
+    pub timestamp: Instant,
+    pub pos_err: Vector3<f32>,
+    pub vel_err: Vector3<f32>,
+    pub attitude_err: Vector3<f32>,
+    pub body_rate_err: Vector3<f32>,
+    pub source: u8,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for TrackingError {}
+
+pub const TRACKING_ERROR_SOURCE_CASCADE: u8 = 0;
+pub const TRACKING_ERROR_SOURCE_MPC: u8 = 1;
+pub const TRACKING_ERROR_SOURCE_INDI: u8 = 2;
+
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ArmDisarm {
