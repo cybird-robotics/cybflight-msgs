@@ -983,7 +983,7 @@ pub const GPS_ERR_NAK: u8 = 3;
 pub const GPS_ERR_TIMEOUT: u8 = 4;
 
 /// Flat snapshot of `GpsHealth` + the latest NAV-PVT accuracy fields —
-/// 40 bytes.
+/// 44 bytes.
 ///
 /// Variant fields the active state doesn't define are zero. See
 /// [`GPS_STATE_*`](GPS_STATE_NOT_CONFIGURED) and
@@ -1004,9 +1004,16 @@ pub const GPS_ERR_TIMEOUT: u8 = 4;
 ///   that's an honest "as-of-now" age that doesn't depend on the
 ///   wire sampling cadence.
 /// - `nav_pvt_max_interval_recent_us`: firmware-side health metric
-///   for receiver jitter. Largest inter-arrival gap among the most
-///   recent 16 NAV-PVTs, computed at the source. Single-scalar
-///   threshold input for dashboard alarms / arming gates.
+///   for dropouts. Largest inter-arrival gap among the most recent
+///   16 NAV-PVTs. Threshold input for "did the receiver miss a
+///   frame?" alarms.
+/// - `nav_pvt_mean_interval_recent_us`: ROS `topic hz`-style mean
+///   period over the same window. Threshold input for "is the
+///   typical rate what we expect?" alarms; a TUI converts to Hz
+///   via `Hz = 1_000_000 / value`. Note: the wire alone is too
+///   slow (1 Hz) to compute meaningful inter-PVT stats TUI-side
+///   when GPS runs at 2–5 Hz, so both aggregates are computed at
+///   the source rather than left for the dashboard to derive.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WireGpsHealth {
@@ -1024,6 +1031,10 @@ pub struct WireGpsHealth {
     /// PVTs have been parsed since boot. Compare against the
     /// configured measurement period to detect a jittering pipeline.
     pub nav_pvt_max_interval_recent_us: u32,
+    /// Mean inter-arrival interval over the same 16-PVT window, in
+    /// microseconds. `u32::MAX` until at least two PVTs have been
+    /// parsed. Display as Hz via `1_000_000 / value`.
+    pub nav_pvt_mean_interval_recent_us: u32,
     pub state: u8,
     pub err_kind: u8,
     pub fix_type: u8,
