@@ -983,23 +983,47 @@ pub const GPS_ERR_NAK: u8 = 3;
 pub const GPS_ERR_TIMEOUT: u8 = 4;
 
 /// Flat snapshot of `GpsHealth` + the latest NAV-PVT accuracy fields —
-/// 36 bytes.
+/// 40 bytes.
 ///
-/// Variant fields the active state doesn't define are zero (or
-/// `u32::MAX` for `last_fix_age_ms`/`nav_pvt_age_ms` to disambiguate
-/// "absent" from "0 ms old"). See [`GPS_STATE_*`](GPS_STATE_NOT_CONFIGURED)
-/// and [`GPS_ERR_*`](GPS_ERR_NONE) for the encoding tables.
+/// Variant fields the active state doesn't define are zero. See
+/// [`GPS_STATE_*`](GPS_STATE_NOT_CONFIGURED) and
+/// [`GPS_ERR_*`](GPS_ERR_NONE) for the encoding tables.
+///
+/// ## Inter-PVT cadence on this wire
+///
+/// Earlier revisions carried `last_fix_age_ms` and `nav_pvt_age_ms`
+/// — snapshot ages computed as `<emit time> - <last arrival>`. They
+/// were dropped because plotting them in a GCS dashboard at the
+/// wire's 1 Hz cadence aliases against the GPS ~2-5 Hz NAV-PVT
+/// period and produces a sawtooth that misreads as receiver jitter.
+/// The replacement fields:
+///
+/// - `nav_pvt_arrival_us`: raw `Instant`-microseconds of the most
+///   recent NAV-PVT. The GCS computes liveness/staleness as
+///   `timestamp_us - nav_pvt_arrival_us` from a single record —
+///   that's an honest "as-of-now" age that doesn't depend on the
+///   wire sampling cadence.
+/// - `nav_pvt_max_interval_recent_us`: firmware-side health metric
+///   for receiver jitter. Largest inter-arrival gap among the most
+///   recent 16 NAV-PVTs, computed at the source. Single-scalar
+///   threshold input for dashboard alarms / arming gates.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WireGpsHealth {
     pub timestamp_us: u64,
+    /// `Instant`-microseconds when the firmware GPS task parsed the
+    /// most recent NAV-PVT. `0` when no NAV-PVT has ever been
+    /// received. Use `timestamp_us - nav_pvt_arrival_us` for the
+    /// per-record staleness.
+    pub nav_pvt_arrival_us: u64,
     pub h_acc_mm: u32,
     pub v_acc_mm: u32,
     pub s_acc_mm_s: u32,
-    /// `u32::MAX` when state != Locked.
-    pub last_fix_age_ms: u32,
-    /// `u32::MAX` when no NAV-PVT has ever been received.
-    pub nav_pvt_age_ms: u32,
+    /// Worst-case inter-arrival interval among the most recent 16
+    /// NAV-PVTs, in microseconds. `u32::MAX` until at least two
+    /// PVTs have been parsed since boot. Compare against the
+    /// configured measurement period to detect a jittering pipeline.
+    pub nav_pvt_max_interval_recent_us: u32,
     pub state: u8,
     pub err_kind: u8,
     pub fix_type: u8,

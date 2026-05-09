@@ -256,6 +256,25 @@ pub struct PositionControlSetpoint {
 #[cfg(feature = "embedded")]
 impl Message for PositionControlSetpoint {}
 
+/// ESKF-estimated IMU biases — gyro (rad/s) and accel (m/s^2).
+///
+/// Decimated mirror of the per-predict-tick `ESKF_GYRO_BIAS` /
+/// `ESKF_ACCEL_BIAS` Signals in `crate::estimation`. Published at
+/// ~10 Hz on `ESTIMATOR_BIAS_TELEM`; biases drift at seconds-scale
+/// so the channel rate is set well below the 1 kHz predict rate to
+/// keep blackbox bandwidth bounded. Used post-flight for
+/// bias-corrected accel reconstruction in INDI sysid fits.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct EstimatorBias {
+    pub timestamp: Instant,
+    pub gyro_bias_rad_s: Vector3<f32>,
+    pub accel_bias_m_s2: Vector3<f32>,
+}
+
+#[cfg(feature = "embedded")]
+impl Message for EstimatorBias {}
+
 /// Per-solve diagnostics carried alongside [`MissionStatus`].
 ///
 /// Populated once by the mission planner when it finalizes a trajectory
