@@ -66,6 +66,120 @@ pub struct VehicleOdometry {
 #[cfg(feature = "embedded")]
 impl Message for VehicleOdometry {}
 
+/// One neighbour drone's shared state, decoded from a `WireFleetEntry`.
+#[cfg(feature = "embedded")]
+#[derive(Clone, Copy, defmt::Format)]
+pub struct NeighborState {
+    pub position: Vector3<f32>,
+    pub velocity: Vector3<f32>,
+    /// Age of the estimate at the GS send instant.
+    pub age: embassy_time::Duration,
+    /// False when the GS had no fresh estimate for this slot — ignore the pose.
+    pub valid: bool,
+}
+
+/// Snapshot of the whole fleet's state as received from the ground station.
+/// `states[i]` is drone `i` (fleet order); `self_idx` is this drone's own slot.
+///
+/// Safe access for consumers (avoidance / formation): use [`Self::message_age`]
+/// / [`Self::is_stale`] to reject a snapshot whose *whole* fleet-state frame is
+/// too old (GS broadcaster stopped or the link dropped), and iterate only
+/// [`Self::neighbors`] — which already excludes this drone, invalid slots, and
+/// per-entry-stale slots.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct NeighborStates {
+    /// Local RX instant — the basis for whole-message staleness.
+    pub timestamp: Instant,
+    /// UTC microseconds at GS send (for end-to-end latency).
+    pub gs_send_time_utc_us: i64,
+    pub self_idx: u8,
+    pub count: u8,
+    pub states: [NeighborState; wire::MAX_FLEET],
+}
+
+#[cfg(feature = "embedded")]
+impl NeighborStates {
+    /// Decode a received `WireFleetState`. `rx_time` is the local RX instant.
+    pub fn from_wire(w: &wire::WireFleetState, rx_time: Instant) -> Self {
+        let mut states = [NeighborState {
+            position: Vector3::zeros(),
+            velocity: Vector3::zeros(),
+            age: embassy_time::Duration::from_ticks(0),
+            valid: false,
+        }; wire::MAX_FLEET];
+        // Copy packed fields/array by value before use (UB to reference them).
+        let count = w.count;
+        let entries = w.entries;
+        for (i, slot) in states.iter_mut().enumerate() {
+            if i >= count as usize {
+                break;
+            }
+            let e = entries[i];
+            let flags = e.flags;
+            let pos = e.position;
+            let vel = e.velocity;
+            let age_ms = e.age_ms;
+            *slot = NeighborState {
+                position: Vector3::new(pos[0], pos[1], pos[2]),
+                velocity: Vector3::new(vel[0], vel[1], vel[2]),
+                age: embassy_time::Duration::from_millis(age_ms as u64),
+                valid: flags & wire::FLEET_FLAG_VALID != 0,
+            };
+        }
+        Self {
+            timestamp: rx_time,
+            gs_send_time_utc_us: w.gs_send_time_us,
+            self_idx: w.self_idx,
+            count,
+            states,
+        }
+    }
+
+    /// How long since this fleet-state frame was received.
+    pub fn message_age(&self, now: Instant) -> embassy_time::Duration {
+        now.checked_duration_since(self.timestamp)
+            .unwrap_or(embassy_time::Duration::from_ticks(0))
+    }
+
+    /// True if the whole frame is older than `max_age` — treat all neighbours
+    /// as unavailable (the GS stopped broadcasting or the link dropped).
+    pub fn is_stale(&self, now: Instant, max_age: embassy_time::Duration) -> bool {
+        self.message_age(now) > max_age
+    }
+
+    /// This drone's own slot, if the GS included it.
+    pub fn self_state(&self) -> Option<&NeighborState> {
+        let i = self.self_idx as usize;
+        (i < self.count as usize).then(|| &self.states[i])
+    }
+
+    /// Iterate the *usable* neighbours: populated, `valid`, not this drone, and
+    /// individually no older than `max_entry_age`. Returns nothing once the
+    /// frame itself is stale (`is_stale`), so a single guard covers both the
+    /// whole-link-down and per-drone-dropout cases.
+    pub fn neighbors(
+        &self,
+        now: Instant,
+        max_msg_age: embassy_time::Duration,
+        max_entry_age: embassy_time::Duration,
+    ) -> impl Iterator<Item = (usize, &NeighborState)> {
+        let frame_ok = !self.is_stale(now, max_msg_age);
+        let self_idx = self.self_idx as usize;
+        let count = self.count as usize;
+        self.states
+            .iter()
+            .enumerate()
+            .take(count)
+            .filter(move |(i, s)| {
+                frame_ok && *i != self_idx && s.valid && s.age <= max_entry_age
+            })
+    }
+}
+
+#[cfg(feature = "embedded")]
+impl Message for NeighborStates {}
+
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ViconPose {

@@ -26,6 +26,10 @@ pub mod msg_id {
     pub const POSE: u8 = 128;
     pub const TIME_SYNC: u8 = 129;
     pub const PING_RESP: u8 = 130;
+    /// Fleet state: timestamped position + velocity of every drone in the
+    /// swarm, broadcast by the ground station to each drone at 10 Hz so it
+    /// knows where its neighbors are. See `WireFleetState`.
+    pub const FLEET_STATE: u8 = 131;
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
@@ -898,6 +902,67 @@ pub struct WirePingResp {
 impl WireMessage for WirePingResp {
     const MSG_ID: u8 = msg_id::PING_RESP;
 }
+
+/// Maximum number of drones a single `WireFleetState` frame carries. Sized so
+/// the whole message fits the 128-byte wire payload (12-byte header + 4×28).
+pub const MAX_FLEET: usize = 4;
+
+/// `WireFleetEntry.flags` bit: the estimate is fresh (within the GCS staleness
+/// threshold). When clear, `position`/`velocity` are meaningless and the slot
+/// should be ignored.
+pub const FLEET_FLAG_VALID: u8 = 0b0000_0001;
+
+/// One drone's shared state within a `WireFleetState`. The drone's identity is
+/// its **index** in the `entries` array (stable fleet order) — there is no
+/// per-entry id. 28 bytes.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireFleetEntry {
+    /// Bitset; see `FLEET_FLAG_VALID`. A zeroed entry (`flags == 0`) is an
+    /// absent/stale drone and must be ignored by the receiver.
+    pub flags: u8,
+    pub _pad: u8,
+    /// Age of this estimate at `gs_send_time_us`, in milliseconds, saturating
+    /// at `u16::MAX` (~65 s). Absolute capture time ≈ `gs_send_time_us − age_ms×1000`.
+    pub age_ms: u16,
+    /// Position in metres, in the drone's world frame (delivered verbatim from
+    /// the source `WireVehicleOdometry`; cross-drone frame consistency is the
+    /// estimator's responsibility).
+    pub position: [f32; 3],
+    /// Velocity in metres/second.
+    pub velocity: [f32; 3],
+}
+
+/// Fleet state broadcast from the ground station to each drone at 10 Hz —
+/// 124 bytes.
+///
+/// Carries the timestamped position+velocity of every drone in the swarm so
+/// each one knows where its neighbours are. The frame is self-contained: a
+/// lost datagram just means one stale 100 ms cycle. `entries[i]` is drone `i`
+/// in fleet order; `self_idx` tells the recipient which entry is itself.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireFleetState {
+    /// UTC microseconds at GCS send. Lets the receiver compute end-to-end
+    /// latency (`local_utc_now − gs_send_time_us`) and each entry's absolute
+    /// capture time (`gs_send_time_us − age_ms×1000`).
+    pub gs_send_time_us: i64,
+    /// The recipient's own index in `entries`, so it can skip itself.
+    /// `0xFF` if the recipient isn't among the first `MAX_FLEET` drones.
+    pub self_idx: u8,
+    /// Number of populated entries = `min(fleet_len, MAX_FLEET)`.
+    pub count: u8,
+    pub _pad: [u8; 2],
+    pub entries: [WireFleetEntry; MAX_FLEET],
+}
+
+impl WireMessage for WireFleetState {
+    const MSG_ID: u8 = msg_id::FLEET_STATE;
+}
+
+// The frame must fit the wire payload budget — enforced at compile time.
+const _: () = assert!(core::mem::size_of::<WireFleetState>() <= MAX_WIRE_PAYLOAD);
+const _: () = assert!(core::mem::size_of::<WireFleetEntry>() == 28);
 
 /// Time sync diagnostics downlink — 25 bytes.
 #[derive(Clone, Copy)]
