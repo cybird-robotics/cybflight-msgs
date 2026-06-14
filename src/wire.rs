@@ -30,6 +30,10 @@ pub mod msg_id {
     /// swarm, broadcast by the ground station to each drone at 10 Hz so it
     /// knows where its neighbors are. See `WireFleetState`.
     pub const FLEET_STATE: u8 = 131;
+    /// Peer pose: one drone's ESKF position as absolute geodetic lat/lon/alt +
+    /// liveness status, forwarded **directly** leader→chaser between ESP bridges
+    /// (bypassing the GS) for low-latency gimbal tracking. See `WirePeerPose`.
+    pub const PEER_POSE: u8 = 132;
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
@@ -85,6 +89,59 @@ pub trait WireMessage: Copy + Sized {
 
     fn as_bytes(&self) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, Self::SIZE) }
+    }
+}
+
+/// Peer-pose status flags (`WirePeerPose::status`).
+pub const PEER_FLAG_CONVERGED: u8 = 0x01;
+pub const PEER_FLAG_3D_FIX: u8 = 0x02;
+
+/// One drone's pose for direct peer-to-peer (leader→chaser) sharing — 21 bytes.
+///
+/// Carries the sender's **fused ESKF** position re-expressed as absolute geodetic
+/// lat/lon/alt (so the receiver reprojects it into its own local ENU regardless
+/// of where the sender anchored its frame — the origin cancels in
+/// `leader − self`), plus liveness flags. Sent ~100 Hz directly between ESP
+/// bridges; the receiver gates gimbal tracking on the flags + frame freshness.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WirePeerPose {
+    /// Sender capture time, UTC microseconds (for end-to-end age / staleness).
+    pub timestamp_us: u64,
+    /// Latitude, degrees × 1e7.
+    pub lat_1e7: i32,
+    /// Longitude, degrees × 1e7.
+    pub lon_1e7: i32,
+    /// Altitude MSL, millimetres.
+    pub alt_mm: i32,
+    /// Bit0 `PEER_FLAG_CONVERGED` (ESKF converged); bit1 `PEER_FLAG_3D_FIX` (≥3D GNSS fix).
+    pub status: u8,
+}
+
+impl WireMessage for WirePeerPose {
+    const MSG_ID: u8 = msg_id::PEER_POSE;
+}
+
+const _: () = assert!(core::mem::size_of::<WirePeerPose>() <= MAX_WIRE_PAYLOAD);
+
+impl WirePeerPose {
+    /// Build from geodetic radians + altitude (m MSL) + liveness flags.
+    pub fn new(
+        timestamp_us: u64,
+        lat_rad: f64,
+        lon_rad: f64,
+        alt_m: f32,
+        converged: bool,
+        has_3d_fix: bool,
+    ) -> Self {
+        const RAD2DEG: f64 = 180.0 / core::f64::consts::PI;
+        Self {
+            timestamp_us,
+            lat_1e7: (lat_rad * RAD2DEG * 1e7) as i32,
+            lon_1e7: (lon_rad * RAD2DEG * 1e7) as i32,
+            alt_mm: (alt_m * 1000.0) as i32,
+            status: (converged as u8) | ((has_3d_fix as u8) << 1),
+        }
     }
 }
 

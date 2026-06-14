@@ -180,6 +180,61 @@ impl NeighborStates {
 #[cfg(feature = "embedded")]
 impl Message for NeighborStates {}
 
+/// A peer drone's pose decoded from [`wire::WirePeerPose`] (direct leader→chaser
+/// link). lat/lon in **radians**, alt in metres MSL — ready to reproject into the
+/// local ENU via `LlhOrigin::llh_to_enu`.
+#[cfg(feature = "embedded")]
+#[derive(Clone, Copy, defmt::Format)]
+pub struct PeerPose {
+    /// Local RX instant — basis for staleness.
+    pub rx: Instant,
+    /// Sender capture time, UTC microseconds.
+    pub timestamp_us: u64,
+    pub lat_rad: f64,
+    pub lon_rad: f64,
+    pub alt_m: f32,
+    /// Sender's ESKF has converged.
+    pub converged: bool,
+    /// Sender has a ≥3D GNSS fix.
+    pub has_3d_fix: bool,
+}
+
+#[cfg(feature = "embedded")]
+impl PeerPose {
+    pub fn from_wire(w: &wire::WirePeerPose, rx: Instant) -> Self {
+        const DEG2RAD: f64 = core::f64::consts::PI / 180.0;
+        // Copy packed fields before use (unaligned reads are UB by reference).
+        let lat_1e7 = w.lat_1e7;
+        let lon_1e7 = w.lon_1e7;
+        let alt_mm = w.alt_mm;
+        let status = w.status;
+        let timestamp_us = w.timestamp_us;
+        Self {
+            rx,
+            timestamp_us,
+            lat_rad: (lat_1e7 as f64) * 1e-7 * DEG2RAD,
+            lon_rad: (lon_1e7 as f64) * 1e-7 * DEG2RAD,
+            alt_m: (alt_mm as f32) * 1e-3,
+            converged: status & wire::PEER_FLAG_CONVERGED != 0,
+            has_3d_fix: status & wire::PEER_FLAG_3D_FIX != 0,
+        }
+    }
+
+    /// How long since this pose was received.
+    pub fn age(&self, now: Instant) -> embassy_time::Duration {
+        now.checked_duration_since(self.rx)
+            .unwrap_or(embassy_time::Duration::from_ticks(0))
+    }
+
+    /// Usable for tracking: sender converged + has a 3D fix + fresh.
+    pub fn usable(&self, now: Instant, max_age: embassy_time::Duration) -> bool {
+        self.converged && self.has_3d_fix && self.age(now) <= max_age
+    }
+}
+
+#[cfg(feature = "embedded")]
+impl Message for PeerPose {}
+
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct ViconPose {
