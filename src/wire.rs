@@ -51,6 +51,18 @@ pub mod msg_id {
     /// fields. Mirrors the live `gpshealth` shell command and the
     /// blackbox `/gps_health` topic. Downlinked at 1 Hz.
     pub const GPS_HEALTH: u8 = 27;
+    /// Which airframe this firmware believes it is: the baked
+    /// `airframe.name`, the vehicle YAML stem it was built from, and the
+    /// compiled-in position source. Static for the life of a boot, so it
+    /// is downlinked slowly (~0.2 Hz) purely as a self-announcement.
+    ///
+    /// Exists so the ground station can *verify* a binding it otherwise
+    /// has to assume: poses are routed to a drone by IP, and nothing
+    /// checks that the board at that IP runs the firmware for the
+    /// airframe whose mocap subject is being sent there. A mis-flashed
+    /// board silently flies another machine's mass, inertia and gains
+    /// while tracking another body's poses. See [`WireVehicleIdentity`].
+    pub const VEHICLE_IDENTITY: u8 = 28;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -1085,6 +1097,81 @@ impl WireMessage for WireSystemHealth {
     const MSG_ID: u8 = msg_id::SYSTEM_HEALTH;
 }
 
+/// Maximum length of an airframe name / vehicle stem on the wire.
+/// Names are ASCII `[A-Za-z0-9_-]` (enforced by the vehicle-YAML loader),
+/// NUL-padded here.
+pub const IDENT_LEN: usize = 24;
+
+/// `pos_source` encoding in [`WireVehicleIdentity`].
+pub mod pos_source {
+    /// Firmware did not declare one (no `est_pos_*` feature).
+    pub const UNKNOWN: u8 = 0;
+    /// Motion capture — this drone NEEDS an external pose stream to fly.
+    pub const MOCAP: u8 = 1;
+    /// GNSS — this drone must NOT be sent mocap poses.
+    pub const GPS: u8 = 2;
+}
+
+/// Self-announced firmware identity — 64 bytes.
+///
+/// Every field is fixed at build time, so this never changes during a
+/// boot; it is downlinked slowly and exists only to let the ground
+/// station check its roster against reality.
+///
+/// `pos_source` is included because the routing decision depends on it,
+/// not just on the name: flashing the *outdoor* (GPS) build of the right
+/// airframe and flying it indoors gives a firmware that never subscribes
+/// to the pose channel at all, which the name alone would not reveal.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireVehicleIdentity {
+    pub timestamp_us: u64,
+    /// `airframe.name` from the vehicle YAML — the physical machine.
+    /// All-NUL means the YAML declared none.
+    pub airframe_name: [u8; IDENT_LEN],
+    /// Vehicle YAML stem this firmware was baked from. Distinguishes the
+    /// indoor and outdoor builds of one airframe.
+    pub vehicle: [u8; IDENT_LEN],
+    /// See [`pos_source`].
+    pub pos_source: u8,
+    pub _pad: [u8; 7],
+}
+
+impl WireMessage for WireVehicleIdentity {
+    const MSG_ID: u8 = msg_id::VEHICLE_IDENTITY;
+}
+
+impl WireVehicleIdentity {
+    /// Copy `s` into a NUL-padded fixed field, truncating if it does not
+    /// fit. Truncation is silent here because the vehicle-YAML loader is
+    /// the place that can produce a good error message about it.
+    pub fn pack_ident(s: &str) -> [u8; IDENT_LEN] {
+        let mut out = [0u8; IDENT_LEN];
+        let b = s.as_bytes();
+        let n = if b.len() > IDENT_LEN { IDENT_LEN } else { b.len() };
+        out[..n].copy_from_slice(&b[..n]);
+        out
+    }
+
+    /// Decode a NUL-padded field back to `&str`, dropping anything past
+    /// the first NUL. Returns `None` if the bytes are not valid UTF-8.
+    pub fn unpack_ident(field: &[u8; IDENT_LEN]) -> Option<&str> {
+        let end = field.iter().position(|b| *b == 0).unwrap_or(IDENT_LEN);
+        core::str::from_utf8(&field[..end]).ok()
+    }
+
+    /// The airframe this firmware was built for, or `None` if the vehicle
+    /// YAML declared no `airframe.name`.
+    pub fn airframe(&self) -> Option<&str> {
+        Self::unpack_ident(&self.airframe_name).filter(|s| !s.is_empty())
+    }
+
+    /// The vehicle YAML stem, or `None` if unset/undecodable.
+    pub fn vehicle_stem(&self) -> Option<&str> {
+        Self::unpack_ident(&self.vehicle).filter(|s| !s.is_empty())
+    }
+}
+
 // ── GpsHealth state / err_kind encoding ───────────────────────────────────
 //
 // Stable on disk; never renumber.
@@ -1169,4 +1256,46 @@ pub struct WireGpsHealth {
 
 impl WireMessage for WireGpsHealth {
     const MSG_ID: u8 = msg_id::GPS_HEALTH;
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn identity_is_64_bytes_and_fits_a_frame() {
+        assert_eq!(core::mem::size_of::<WireVehicleIdentity>(), 64);
+        assert!(core::mem::size_of::<WireVehicleIdentity>() <= MAX_WIRE_PAYLOAD);
+    }
+
+    #[test]
+    fn ident_round_trips_and_truncates() {
+        let f = WireVehicleIdentity::pack_ident("hunter_01");
+        assert_eq!(WireVehicleIdentity::unpack_ident(&f), Some("hunter_01"));
+
+        // Exactly-full field has no NUL terminator; unpack must still stop
+        // at the field boundary rather than run off the end.
+        let full = "a".repeat(IDENT_LEN);
+        let f = WireVehicleIdentity::pack_ident(&full);
+        assert_eq!(WireVehicleIdentity::unpack_ident(&f), Some(full.as_str()));
+
+        let f = WireVehicleIdentity::pack_ident(&"b".repeat(IDENT_LEN + 9));
+        assert_eq!(
+            WireVehicleIdentity::unpack_ident(&f),
+            Some("b".repeat(IDENT_LEN).as_str())
+        );
+    }
+
+    #[test]
+    fn absent_airframe_reads_as_none() {
+        let id = WireVehicleIdentity {
+            timestamp_us: 0,
+            airframe_name: [0u8; IDENT_LEN],
+            vehicle: WireVehicleIdentity::pack_ident("sim_baseline"),
+            pos_source: pos_source::UNKNOWN,
+            _pad: [0u8; 7],
+        };
+        assert_eq!(id.airframe(), None);
+        assert_eq!(id.vehicle_stem(), Some("sim_baseline"));
+    }
 }
