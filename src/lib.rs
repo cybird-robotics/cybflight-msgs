@@ -400,6 +400,35 @@ pub struct OcpSolverOutput {
 #[cfg(feature = "embedded")]
 impl Message for OcpSolverOutput {}
 
+/// Width of the learned cost policy's output (`cybflight_core`'s
+/// `mpc::cost_adapt::NZ`): 8 stage + 8 terminal state residuals + 3
+/// body-rate input weights.
+#[cfg(feature = "embedded")]
+pub const MPC_COST_NZ: usize = 19;
+
+/// One outer-loop tick of the learned cost adaptation
+/// (docs/learned_mpc_cost_deploy.md): the policy output `z`, the
+/// effective weights it produced, and its wall-clock cost. Without this
+/// record a flight cannot be compared against the sim probes.
+#[cfg(feature = "embedded")]
+#[derive(Clone, defmt::Format)]
+pub struct MpcCostAdapt {
+    pub timestamp: Instant,
+    /// Raw policy output after the `[−1, 1]` clamp, before `gain`.
+    pub z: [f32; MPC_COST_NZ],
+    /// Effective weights after `gain` + the log map: stage contour, lag,
+    /// and the three body-rate input weights.
+    pub w_contour: f32,
+    pub w_lag: f32,
+    pub w_rate: [f32; 3],
+    /// `mpc_learned_gain` at this tick.
+    pub gain: f32,
+    /// Observation + forward-pass wall time.
+    pub policy_time_us: u32,
+}
+#[cfg(feature = "embedded")]
+impl Message for MpcCostAdapt {}
+
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
 pub struct AttitudeControlSetpoint {
