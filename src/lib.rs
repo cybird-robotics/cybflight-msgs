@@ -396,6 +396,11 @@ pub struct OcpSolverOutput {
     pub iterations: i32,
     pub converged: bool,
     pub solve_time_us: u64,
+    /// Wall time of the learned cost policy's observation + inference
+    /// this tick [µs]. 0 when no policy is baked/enabled (and always 0
+    /// under `outer_mpc_full`). Runs off the command's critical path —
+    /// after the publish — so this is budget telemetry, not latency.
+    pub policy_time_us: u32,
 }
 #[cfg(feature = "embedded")]
 impl Message for OcpSolverOutput {}

@@ -338,7 +338,10 @@ impl WireMotorStateTelemetry {
     }
 }
 
-/// Wire OCP solver output — 37 bytes.
+/// Wire OCP solver output — 41 bytes. `policy_time_us` was APPENDED
+/// (2026-09-08): an old GCS still parses the 37-byte prefix of new
+/// frames, but a new GCS drops old 37-byte frames (`from_bytes` length
+/// check) — pair the GCS update with the firmware that sends it.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WireOcpSolverOutput {
@@ -347,6 +350,7 @@ pub struct WireOcpSolverOutput {
     pub iterations: i32,
     pub converged: u8,
     pub solve_time_us: u64,
+    pub policy_time_us: u32,
 }
 
 impl WireMessage for WireOcpSolverOutput {
@@ -367,6 +371,7 @@ impl WireOcpSolverOutput {
             iterations: msg.iterations,
             converged: msg.converged as u8,
             solve_time_us: msg.solve_time_us,
+            policy_time_us: msg.policy_time_us,
         }
     }
 }
