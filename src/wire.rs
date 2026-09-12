@@ -5,6 +5,9 @@
 
 /// Wire-format message identifiers.
 pub mod msg_id {
+    /// Reserved — never assign. A downlink UDP datagram whose first byte is 0
+    /// is an ESP-bridge batch envelope, not a frame (see `crate::udp_batch`).
+    pub const RESERVED_BATCH_MARKER: u8 = 0;
     // Downlink (STM32 → ground)
     pub const IMU: u8 = 1;
     pub const VEHICLE_ATTITUDE: u8 = 2;
@@ -34,6 +37,11 @@ pub mod msg_id {
     /// liveness status, forwarded **directly** leader→chaser between ESP bridges
     /// (bypassing the GS) for low-latency gimbal tracking. See `WirePeerPose`.
     pub const PEER_POSE: u8 = 132;
+    /// Fleet-wide session ENU origin (the RTK base station's antenna
+    /// reference point, WGS84 ellipsoidal height), pushed by the ground
+    /// station to every drone at 1 Hz. Never persisted on the drone — every
+    /// boot waits for it again. See [`WireGnssOriginSet`].
+    pub const GNSS_ORIGIN_SET: u8 = 133;
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
@@ -63,6 +71,9 @@ pub mod msg_id {
     /// board silently flies another machine's mass, inertia and gains
     /// while tracking another body's poses. See [`WireVehicleIdentity`].
     pub const VEHICLE_IDENTITY: u8 = 28;
+    /// Per-drone echo of the ENU origin it is (or is not yet) flying in,
+    /// plus its latched HOME. Downlinked at 1 Hz. See [`WireGnssOrigin`].
+    pub const GNSS_ORIGIN: u8 = 29;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -124,7 +135,7 @@ pub struct WirePeerPose {
     pub lat_1e7: i32,
     /// Longitude, degrees × 1e7.
     pub lon_1e7: i32,
-    /// Altitude MSL, millimetres.
+    /// Height in the sender's origin datum (WGS84 ellipsoidal), millimetres.
     pub alt_mm: i32,
     /// Bit0 `PEER_FLAG_CONVERGED` (ESKF converged); bit1 `PEER_FLAG_3D_FIX` (≥3D GNSS fix).
     pub status: u8,
@@ -137,7 +148,7 @@ impl WireMessage for WirePeerPose {
 const _: () = assert!(core::mem::size_of::<WirePeerPose>() <= MAX_WIRE_PAYLOAD);
 
 impl WirePeerPose {
-    /// Build from geodetic radians + altitude (m MSL) + liveness flags.
+    /// Build from geodetic radians + height (m, origin datum) + liveness flags.
     pub fn new(
         timestamp_us: u64,
         lat_rad: f64,
@@ -156,6 +167,117 @@ impl WirePeerPose {
         }
     }
 }
+
+/// `WireGnssOriginSet::flags` bit 0: the origin fields are meaningful.
+pub const ORIGIN_SET_FLAG_VALID: u8 = 0x01;
+
+/// Ground station → drone: the session's shared ENU origin — 21 bytes.
+///
+/// The origin is the RTK base station's antenna reference point, decoded
+/// by the ground station from RTCM 1005/1006 (ECEF → WGS84) or given on
+/// its command line. The base is portable, so this is a per-session value:
+/// the drone latches it once per boot and never stores it.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireGnssOriginSet {
+    /// Latitude [deg].
+    pub lat_deg: f64,
+    /// Longitude [deg].
+    pub lon_deg: f64,
+    /// WGS84 ellipsoidal height [m]. NOT mean sea level.
+    pub h_ell_m: f32,
+    /// Bit0 [`ORIGIN_SET_FLAG_VALID`].
+    pub flags: u8,
+}
+
+impl WireMessage for WireGnssOriginSet {
+    const MSG_ID: u8 = msg_id::GNSS_ORIGIN_SET;
+}
+
+const _: () = assert!(core::mem::size_of::<WireGnssOriginSet>() <= MAX_WIRE_PAYLOAD);
+
+impl WireGnssOriginSet {
+    /// A VALID-flagged origin from degrees + ellipsoidal height.
+    pub fn new(lat_deg: f64, lon_deg: f64, h_ell_m: f32) -> Self {
+        Self { lat_deg, lon_deg, h_ell_m, flags: ORIGIN_SET_FLAG_VALID }
+    }
+
+    /// `(lat_deg, lon_deg, h_ell_m)` when the VALID flag is set and every
+    /// field is finite and in range; `None` otherwise. The single
+    /// validation point for both the firmware decoder and host tests.
+    pub fn validated(&self) -> Option<(f64, f64, f32)> {
+        // Copy packed fields before use (unaligned reads are UB by reference).
+        let (lat, lon, h, flags) = (self.lat_deg, self.lon_deg, self.h_ell_m, self.flags);
+        if flags & ORIGIN_SET_FLAG_VALID == 0 {
+            return None;
+        }
+        if !(lat.is_finite() && lon.is_finite() && h.is_finite()) {
+            return None;
+        }
+        if !((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)) {
+            return None;
+        }
+        // Ellipsoidal heights on Earth's surface span roughly −110..+9000 m;
+        // anything far outside is a unit or datum mistake, not a site.
+        if !(-1000.0..=10_000.0).contains(&h) {
+            return None;
+        }
+        Some((lat, lon, h))
+    }
+}
+
+/// `WireGnssOrigin::state` values.
+pub mod origin_state {
+    /// No origin latched yet (no ground-station origin, or no RTK fix).
+    pub const WAITING: u8 = 0;
+    /// Origin latched; the ENU frame is fixed for this boot.
+    pub const LATCHED: u8 = 1;
+    /// The seed RTK fix lay farther from the offered origin than
+    /// `gps_origin_max_dist_m`; still waiting.
+    pub const REJECTED_TOO_FAR: u8 = 2;
+    /// A later ground-station origin disagrees with the latched one by
+    /// more than `gps_origin_mismatch_m`. Sticky until reboot.
+    pub const MISMATCH: u8 = 3;
+}
+
+/// `WireGnssOrigin::source` values.
+pub mod origin_source {
+    pub const NONE: u8 = 0;
+    /// Ground-station uplink ([`WireGnssOriginSet`]).
+    pub const UPLINK: u8 = 1;
+    /// Vehicle YAML `origin:` (offline / fixed-site override).
+    pub const BAKED_YAML: u8 = 2;
+    /// Legacy: the drone's own first RTK-fixed PVT.
+    pub const FIRST_FIX: u8 = 3;
+}
+
+/// Drone → ground station: the origin this drone latched, its state, and
+/// the HOME it latched at arming — 43 bytes. Downlinked at 1 Hz.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireGnssOrigin {
+    pub timestamp_us: u64,
+    /// Latched origin latitude [deg]; zero until latched.
+    pub lat_deg: f64,
+    /// Latched origin longitude [deg]; zero until latched.
+    pub lon_deg: f64,
+    /// Latched origin WGS84 ellipsoidal height [m]; zero until latched.
+    pub h_ell_m: f32,
+    /// See [`origin_state`].
+    pub state: u8,
+    /// See [`origin_source`].
+    pub source: u8,
+    /// HOME (latched at the arm edge) in this drone's ENU frame [m].
+    pub home_enu: [f32; 3],
+    /// 1 when `home_enu` is meaningful (armed with a latched home).
+    pub home_valid: u8,
+}
+
+impl WireMessage for WireGnssOrigin {
+    const MSG_ID: u8 = msg_id::GNSS_ORIGIN;
+}
+
+const _: () = assert!(core::mem::size_of::<WireGnssOrigin>() <= MAX_WIRE_PAYLOAD);
 
 // ---------------------------------------------------------------------------
 // Downlink types (STM32 → ground)
@@ -1302,5 +1424,39 @@ mod identity_tests {
         };
         assert_eq!(id.airframe(), None);
         assert_eq!(id.vehicle_stem(), Some("sim_baseline"));
+    }
+}
+
+#[cfg(test)]
+mod origin_wire_tests {
+    use super::*;
+
+    #[test]
+    fn origin_message_sizes() {
+        assert_eq!(core::mem::size_of::<WireGnssOriginSet>(), 21);
+        assert_eq!(core::mem::size_of::<WireGnssOrigin>(), 43);
+    }
+
+    #[test]
+    fn origin_set_round_trips_through_bytes() {
+        let w = WireGnssOriginSet::new(47.397_741_9, 8.545_593_8, 540.25);
+        let back = WireGnssOriginSet::from_bytes(w.as_bytes()).unwrap();
+        let (lat, lon, h) = back.validated().unwrap();
+        assert_eq!(lat, 47.397_741_9);
+        assert_eq!(lon, 8.545_593_8);
+        assert_eq!(h, 540.25);
+    }
+
+    #[test]
+    fn origin_set_validation_rejects_bad_input() {
+        let mut w = WireGnssOriginSet::new(47.0, 8.0, 500.0);
+        w.flags = 0;
+        assert!(w.validated().is_none(), "VALID flag clear");
+        assert!(WireGnssOriginSet::new(f64::NAN, 8.0, 500.0).validated().is_none());
+        assert!(WireGnssOriginSet::new(91.0, 8.0, 500.0).validated().is_none());
+        assert!(WireGnssOriginSet::new(47.0, 181.0, 500.0).validated().is_none());
+        assert!(WireGnssOriginSet::new(47.0, 8.0, f32::INFINITY).validated().is_none());
+        assert!(WireGnssOriginSet::new(47.0, 8.0, 50_000.0).validated().is_none());
+        assert!(WireGnssOriginSet::new(-33.9, 151.2, -20.0).validated().is_some());
     }
 }

@@ -2,6 +2,9 @@
 
 pub mod wire;
 
+/// Downlink datagram envelope (bridge → ground station). See [`udp_batch`].
+pub mod udp_batch;
+
 #[cfg(feature = "embedded")]
 pub mod dshot;
 
@@ -234,6 +237,44 @@ impl PeerPose {
 
 #[cfg(feature = "embedded")]
 impl Message for PeerPose {}
+
+/// Ground-station session origin (msg 133), decoded and validated.
+///
+/// Published by the ESP-bridge RX task on `sensors::GNSS_ORIGIN_CMD` and
+/// consumed by the GPS estimator, which latches it as its ENU origin.
+#[cfg(feature = "embedded")]
+#[derive(Clone, Copy, defmt::Format)]
+pub struct GnssOriginCmd {
+    /// Local RX instant.
+    pub rx: Instant,
+    pub lat_rad: f64,
+    pub lon_rad: f64,
+    /// WGS84 ellipsoidal height [m].
+    pub h_ell_m: f32,
+}
+
+#[cfg(feature = "embedded")]
+impl GnssOriginCmd {
+    /// `None` when the VALID flag is clear or a field is non-finite or out
+    /// of range (see [`wire::WireGnssOriginSet::validated`]).
+    pub fn from_wire(w: &wire::WireGnssOriginSet, rx: Instant) -> Option<Self> {
+        let (lat_deg, lon_deg, h_ell_m) = w.validated()?;
+        Some(Self {
+            rx,
+            lat_rad: lat_deg.to_radians(),
+            lon_rad: lon_deg.to_radians(),
+            h_ell_m,
+        })
+    }
+
+    /// How long since this command was received.
+    pub fn age(&self, now: Instant) -> embassy_time::Duration {
+        now.saturating_duration_since(self.rx)
+    }
+}
+
+#[cfg(feature = "embedded")]
+impl Message for GnssOriginCmd {}
 
 #[cfg(feature = "embedded")]
 #[derive(Clone, defmt::Format)]
@@ -544,6 +585,13 @@ pub const SOLVE_REJECT_STATE_CHANGED: u8 = 6;
 /// Race detected inside the publish critical section (abort flag flipped
 /// or state changed between the check and the slot write).
 pub const SOLVE_REJECT_PUBLISH_RACE: u8 = 7;
+/// Offline profile's timestamps are not strictly increasing from > 0.
+pub const SOLVE_REJECT_INVALID_TIMES: u8 = 8;
+/// Offline profile is structurally unusable for this solve (e.g. the live
+/// head is too far from a home-relative mission's first waypoint).
+pub const SOLVE_REJECT_PROFILE_INVALID: u8 = 9;
+/// A home-relative mission was requested with no HOME latched.
+pub const SOLVE_REJECT_NO_HOME: u8 = 10;
 
 #[cfg(feature = "embedded")]
 impl SolveDiagnostics {
