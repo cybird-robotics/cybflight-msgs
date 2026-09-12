@@ -22,6 +22,13 @@
 //!   without a USB log attached.
 //! * Each frame is `2 ..= MAX_FRAME_SIZE` bytes, so one length byte suffices.
 //!
+//! A bridge belongs to one ground station at a time. It answers any other
+//! sender's uplink with a **busy notice**, `[0x00 MARKER][KIND_BUSY][owner
+//! IPv4: 4 bytes]`, at most once a second, so a second ground station started
+//! by mistake can tell its operator which PC owns the drone. [`classify`]
+//! reports it as [`Datagram::Busy`]; a receiver that predates it sees an
+//! unsupported version and ignores it.
+//!
 //! `no_std`, no allocation: the same code runs on the bridge and the host.
 
 use crate::wire::{FRAME_HEADER_SIZE, MAX_FRAME_SIZE};
@@ -35,6 +42,16 @@ pub const HEADER_LEN: usize = 10;
 /// Largest datagram a writer should produce: fits a 1500 B Ethernet MTU with
 /// IP/UDP headers and 802.11 encapsulation to spare, so it is never fragmented.
 pub const MAX_DATAGRAM: usize = 1400;
+
+/// Second byte of a busy notice, in place of [`VERSION`].
+pub const KIND_BUSY: u8 = 0x80;
+/// Length of a busy notice: marker, kind, owner IPv4.
+pub const BUSY_LEN: usize = 6;
+
+/// A busy notice naming `owner`, the ground station the bridge belongs to.
+pub fn busy_notice(owner: [u8; 4]) -> [u8; BUSY_LEN] {
+    [MARKER, KIND_BUSY, owner[0], owner[1], owner[2], owner[3]]
+}
 
 /// Bridge-side cumulative counters carried in every batch header. Each wraps
 /// at `u16::MAX`; consumers take wrapping deltas between datagrams.
@@ -153,6 +170,9 @@ pub enum Datagram<'a> {
     Single(&'a [u8]),
     /// A batch envelope: its header and an iterator over its frames.
     Batch(BatchHeader, Frames<'a>),
+    /// A busy notice: the bridge belongs to the ground station at `owner`
+    /// and dropped the recipient's uplink.
+    Busy { owner: [u8; 4] },
     /// A batch marker with a version this build does not understand.
     Unsupported(u8),
     /// Empty, shorter than a frame header, or a truncated batch header.
@@ -166,6 +186,11 @@ pub fn classify(d: &[u8]) -> Datagram<'_> {
         Some(&MARKER) => {
             if d.len() < 2 {
                 Datagram::Malformed
+            } else if d[1] == KIND_BUSY {
+                match d.get(2..BUSY_LEN) {
+                    Some(&[a, b, c, e]) => Datagram::Busy { owner: [a, b, c, e] },
+                    _ => Datagram::Malformed,
+                }
             } else if d[1] != VERSION {
                 Datagram::Unsupported(d[1])
             } else if d.len() < HEADER_LEN {
@@ -331,6 +356,17 @@ mod tests {
             }
             other => panic!("expected empty batch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn busy_notice_round_trip() {
+        let n = busy_notice([192, 168, 50, 224]);
+        assert_eq!(n.len(), BUSY_LEN);
+        assert!(matches!(
+            classify(&n),
+            Datagram::Busy { owner: [192, 168, 50, 224] }
+        ));
+        assert!(matches!(classify(&n[..BUSY_LEN - 1]), Datagram::Malformed));
     }
 
     /// Tiny fixed-capacity Vec stand-in so the tests stay `no_std`.
