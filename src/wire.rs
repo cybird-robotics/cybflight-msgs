@@ -42,6 +42,10 @@ pub mod msg_id {
     /// station to every drone at 1 Hz. Never persisted on the drone — every
     /// boot waits for it again. See [`WireGnssOriginSet`].
     pub const GNSS_ORIGIN_SET: u8 = 133;
+    /// Radio link status reported by the datalink bridge itself (not
+    /// forwarded from the ground station): kind, state, RSSI, reconnect
+    /// count. The ESP32 bridge sends it at 5 Hz. See [`WireDatalinkStatus`].
+    pub const DATALINK_STATUS: u8 = 134;
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
@@ -74,6 +78,12 @@ pub mod msg_id {
     /// Per-drone echo of the ENU origin it is (or is not yet) flying in,
     /// plus its latched HOME. Downlinked at 1 Hz. See [`WireGnssOrigin`].
     pub const GNSS_ORIGIN: u8 = 29;
+    /// Drone ↔ ground-station datalink status as the flight controller
+    /// sees it (radio kind/state/RSSI from the last bridge report, plus
+    /// FC-side uplink age and ping RTT). Downlinked at 1 Hz. A separate
+    /// message rather than more fields on `SystemHealth`, whose readers
+    /// reject a short payload. See [`WireDatalinkHealth`].
+    pub const DATALINK_HEALTH: u8 = 30;
 
     // Downlink (STM32 → ground)  — time sync
     pub const PING: u8 = 16;
@@ -195,6 +205,65 @@ impl WireMessage for WireGnssOriginSet {
 }
 
 const _: () = assert!(core::mem::size_of::<WireGnssOriginSet>() <= MAX_WIRE_PAYLOAD);
+
+/// `kind` of a datalink status: which radio carries the drone ↔ ground link.
+pub mod datalink_kind {
+    /// No datalink status known.
+    pub const NONE: u8 = 0;
+    /// WiFi STA through the ESP32 bridge (`cybesp-bridge`).
+    pub const WIFI: u8 = 1;
+    /// LoRa (EBYTE E22 via cybcomm) — reserved for the future driver.
+    pub const LORA: u8 = 2;
+}
+
+/// `state` of a WiFi datalink — mirrors `cybesp-bridge`'s `LinkStatus`.
+pub mod datalink_state {
+    pub const BOOTING: u8 = 0;
+    pub const CONNECTING: u8 = 1;
+    pub const CONNECTED: u8 = 2;
+    pub const DISCONNECTED: u8 = 3;
+    /// No status report received (downlink only).
+    pub const UNKNOWN: u8 = 0xFF;
+}
+
+/// `rssi_dbm` sentinel: not associated / not measured.
+pub const RSSI_UNKNOWN: i8 = i8::MIN;
+
+/// Datalink status reported by the bridge — 9 bytes, ESP32 → STM32.
+///
+/// The one frame (besides TIME_SYNC) the bridge originates rather than
+/// forwards, so it proves the bridge is alive even when nothing arrives
+/// from the ground. Append-only: fields go at the end (readers accept
+/// longer payloads).
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireDatalinkStatus {
+    /// [`datalink_kind`].
+    pub kind: u8,
+    /// [`datalink_state`] for WiFi.
+    pub state: u8,
+    /// RSSI of the associated access point from its last beacon [dBm];
+    /// [`RSSI_UNKNOWN`] when not associated.
+    pub rssi_dbm: i8,
+    /// WiFi disconnects since the bridge booted (saturating).
+    pub reconnects: u16,
+    /// Bridge uptime [ms], wrapping. A drop means the bridge rebooted.
+    pub bridge_uptime_ms: u32,
+}
+
+impl WireMessage for WireDatalinkStatus {
+    const MSG_ID: u8 = msg_id::DATALINK_STATUS;
+}
+
+const _: () = assert!(core::mem::size_of::<WireDatalinkStatus>() <= MAX_WIRE_PAYLOAD);
+
+impl WireDatalinkStatus {
+    /// RSSI in dBm, `None` for [`RSSI_UNKNOWN`].
+    pub fn rssi(&self) -> Option<i8> {
+        let r = self.rssi_dbm;
+        (r != RSSI_UNKNOWN).then_some(r)
+    }
+}
 
 impl WireGnssOriginSet {
     /// A VALID-flagged origin from degrees + ellipsoidal height.
@@ -1224,6 +1293,36 @@ impl WireMessage for WireSystemHealth {
     const MSG_ID: u8 = msg_id::SYSTEM_HEALTH;
 }
 
+/// Datalink health as the flight controller sees it — 25 bytes, 1 Hz.
+///
+/// Same conventions as [`WireSystemHealth`]: ages pre-subtracted on the
+/// firmware side, `u32::MAX` = never; [`RSSI_UNKNOWN`] = no RSSI;
+/// `state` = [`datalink_state::UNKNOWN`] when no bridge report arrived.
+/// Link-agnostic: a LoRa build fills it with `kind = LORA`.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub struct WireDatalinkHealth {
+    pub timestamp_us: u64,
+    /// [`datalink_kind`] of the last status report (`NONE` if none).
+    pub kind: u8,
+    pub state: u8,
+    pub rssi_dbm: i8,
+    pub reconnects: u16,
+    /// Age of the last radio status report [ms] — is the bridge alive?
+    pub status_age_ms: u32,
+    /// Age of the last ground-station-originated frame [ms] — is the
+    /// ground still getting through?
+    pub uplink_age_ms: u32,
+    /// Last ground-station ping round trip [ms]; `u32::MAX` = none yet.
+    pub ping_rtt_ms: u32,
+}
+
+impl WireMessage for WireDatalinkHealth {
+    const MSG_ID: u8 = msg_id::DATALINK_HEALTH;
+}
+
+const _: () = assert!(core::mem::size_of::<WireDatalinkHealth>() <= MAX_WIRE_PAYLOAD);
+
 /// Maximum length of an airframe name / vehicle stem on the wire.
 /// Names are ASCII `[A-Za-z0-9_-]` (enforced by the vehicle-YAML loader),
 /// NUL-padded here.
@@ -1458,5 +1557,54 @@ mod origin_wire_tests {
         assert!(WireGnssOriginSet::new(47.0, 8.0, f32::INFINITY).validated().is_none());
         assert!(WireGnssOriginSet::new(47.0, 8.0, 50_000.0).validated().is_none());
         assert!(WireGnssOriginSet::new(-33.9, 151.2, -20.0).validated().is_some());
+    }
+}
+
+#[cfg(test)]
+mod datalink_wire_tests {
+    use super::*;
+
+    #[test]
+    fn datalink_message_sizes() {
+        assert_eq!(core::mem::size_of::<WireDatalinkStatus>(), 9);
+        assert_eq!(core::mem::size_of::<WireDatalinkHealth>(), 25);
+    }
+
+    #[test]
+    fn datalink_status_round_trips_and_decodes_rssi() {
+        let w = WireDatalinkStatus {
+            kind: datalink_kind::WIFI,
+            state: datalink_state::CONNECTED,
+            rssi_dbm: -62,
+            reconnects: 3,
+            bridge_uptime_ms: 123_456,
+        };
+        let back = WireDatalinkStatus::from_bytes(w.as_bytes()).unwrap();
+        let (k, s, n, up) = (back.kind, back.state, back.reconnects, back.bridge_uptime_ms);
+        assert_eq!((k, s, n, up), (datalink_kind::WIFI, datalink_state::CONNECTED, 3, 123_456));
+        assert_eq!(back.rssi(), Some(-62));
+        let off = WireDatalinkStatus { rssi_dbm: RSSI_UNKNOWN, ..w };
+        assert_eq!(off.rssi(), None);
+        // Appended fields must not break today's reader.
+        let mut longer = w.as_bytes().to_vec();
+        longer.extend_from_slice(&[0xAA; 4]);
+        assert!(WireDatalinkStatus::from_bytes(&longer).is_some());
+    }
+
+    #[test]
+    fn datalink_health_round_trips() {
+        let w = WireDatalinkHealth {
+            timestamp_us: 7,
+            kind: datalink_kind::WIFI,
+            state: datalink_state::DISCONNECTED,
+            rssi_dbm: RSSI_UNKNOWN,
+            reconnects: 2,
+            status_age_ms: 180,
+            uplink_age_ms: u32::MAX,
+            ping_rtt_ms: 12,
+        };
+        let back = WireDatalinkHealth::from_bytes(w.as_bytes()).unwrap();
+        let (st, up, rtt) = (back.state, back.uplink_age_ms, back.ping_rtt_ms);
+        assert_eq!((st, up, rtt), (datalink_state::DISCONNECTED, u32::MAX, 12));
     }
 }
