@@ -33,24 +33,21 @@ pub mod msg_id {
     /// swarm, broadcast by the ground station to each drone at 10 Hz so it
     /// knows where its neighbors are. See `WireFleetState`.
     pub const FLEET_STATE: u8 = 131;
-    /// Peer pose: one drone's ESKF position as absolute geodetic lat/lon/alt +
-    /// liveness status, forwarded **directly** leader→chaser between ESP bridges
-    /// (bypassing the GS) for low-latency gimbal tracking. See `WirePeerPose`.
-    pub const PEER_POSE: u8 = 132;
+    // Message ID 132 is reserved; do not reuse it.
     /// Fleet-wide session ENU origin (the RTK base station's antenna
     /// reference point, WGS84 ellipsoidal height), pushed by the ground
-    /// station to every drone at 1 Hz. Never persisted on the drone — every
-    /// boot waits for it again. See [`WireGnssOriginSet`].
+    /// station to compatible receivers. Receiver support is required; the
+    /// reference firmware does not consume this extension. See [`WireGnssOriginSet`](crate::wire::WireGnssOriginSet).
     pub const GNSS_ORIGIN_SET: u8 = 133;
     /// Radio link status reported by the datalink bridge itself (not
     /// forwarded from the ground station): kind, state, RSSI, reconnect
-    /// count. The ESP32 bridge sends it at 5 Hz. See [`WireDatalinkStatus`].
+    /// count. The ESP32 bridge sends it at 5 Hz. See [`WireDatalinkStatus`](crate::wire::WireDatalinkStatus).
     pub const DATALINK_STATUS: u8 = 134;
 
     pub const VEHICLE_ODOMETRY: u8 = 18;
     pub const POSITION_CONTROL_SETPOINT: u8 = 19;
     pub const ACTUATOR_MOTORS: u8 = 20;
-    pub const GNSS_STATUS: u8 = 21;
+    // Message ID 21 is reserved; do not reuse it.
     pub const MISSION_STATUS: u8 = 22;
     pub const ESTIMATOR_STATUS: u8 = 23;
     pub const MOTOR_STATE_TELEMETRY: u8 = 24;
@@ -73,16 +70,16 @@ pub mod msg_id {
     /// checks that the board at that IP runs the firmware for the
     /// airframe whose mocap subject is being sent there. A mis-flashed
     /// board silently flies another machine's mass, inertia and gains
-    /// while tracking another body's poses. See [`WireVehicleIdentity`].
+    /// while tracking another body's poses. See [`WireVehicleIdentity`](crate::wire::WireVehicleIdentity).
     pub const VEHICLE_IDENTITY: u8 = 28;
     /// Per-drone echo of the ENU origin it is (or is not yet) flying in,
-    /// plus its latched HOME. Downlinked at 1 Hz. See [`WireGnssOrigin`].
+    /// plus its latched HOME. Downlinked at 1 Hz. See [`WireGnssOrigin`](crate::wire::WireGnssOrigin).
     pub const GNSS_ORIGIN: u8 = 29;
     /// Drone ↔ ground-station datalink status as the flight controller
     /// sees it (radio kind/state/RSSI from the last bridge report, plus
     /// FC-side uplink age and ping RTT). Downlinked at 1 Hz. A separate
     /// message rather than more fields on `SystemHealth`, whose readers
-    /// reject a short payload. See [`WireDatalinkHealth`].
+    /// reject a short payload. See [`WireDatalinkHealth`](crate::wire::WireDatalinkHealth).
     pub const DATALINK_HEALTH: u8 = 30;
 
     // Downlink (STM32 → ground)  — time sync
@@ -108,8 +105,11 @@ pub struct FrameHeader {
 /// Trait for wire-format message types.
 ///
 /// # Safety
-/// Implementors must be `#[repr(C, packed)]` with no padding.
-pub trait WireMessage: Copy + Sized {
+/// Implementors must have no padding or uninitialized bytes, and every bit
+/// pattern must be a valid value. Fields must use the wire protocol
+/// representation (packed integers, floats, and arrays).
+/// This protocol is supported on little-endian targets.
+pub unsafe trait WireMessage: Copy + Sized {
     const MSG_ID: u8;
     const SIZE: usize = core::mem::size_of::<Self>();
 
@@ -125,59 +125,6 @@ pub trait WireMessage: Copy + Sized {
     }
 }
 
-/// Peer-pose status flags (`WirePeerPose::status`).
-pub const PEER_FLAG_CONVERGED: u8 = 0x01;
-pub const PEER_FLAG_3D_FIX: u8 = 0x02;
-
-/// One drone's pose for direct peer-to-peer (leader→chaser) sharing — 21 bytes.
-///
-/// Carries the sender's **fused ESKF** position re-expressed as absolute geodetic
-/// lat/lon/alt (so the receiver reprojects it into its own local ENU regardless
-/// of where the sender anchored its frame — the origin cancels in
-/// `leader − self`), plus liveness flags. Sent ~100 Hz directly between ESP
-/// bridges; the receiver gates gimbal tracking on the flags + frame freshness.
-#[derive(Clone, Copy)]
-#[repr(C, packed)]
-pub struct WirePeerPose {
-    /// Sender capture time, UTC microseconds (for end-to-end age / staleness).
-    pub timestamp_us: u64,
-    /// Latitude, degrees × 1e7.
-    pub lat_1e7: i32,
-    /// Longitude, degrees × 1e7.
-    pub lon_1e7: i32,
-    /// Height in the sender's origin datum (WGS84 ellipsoidal), millimetres.
-    pub alt_mm: i32,
-    /// Bit0 `PEER_FLAG_CONVERGED` (ESKF converged); bit1 `PEER_FLAG_3D_FIX` (≥3D GNSS fix).
-    pub status: u8,
-}
-
-impl WireMessage for WirePeerPose {
-    const MSG_ID: u8 = msg_id::PEER_POSE;
-}
-
-const _: () = assert!(core::mem::size_of::<WirePeerPose>() <= MAX_WIRE_PAYLOAD);
-
-impl WirePeerPose {
-    /// Build from geodetic radians + height (m, origin datum) + liveness flags.
-    pub fn new(
-        timestamp_us: u64,
-        lat_rad: f64,
-        lon_rad: f64,
-        alt_m: f32,
-        converged: bool,
-        has_3d_fix: bool,
-    ) -> Self {
-        const RAD2DEG: f64 = 180.0 / core::f64::consts::PI;
-        Self {
-            timestamp_us,
-            lat_1e7: (lat_rad * RAD2DEG * 1e7) as i32,
-            lon_1e7: (lon_rad * RAD2DEG * 1e7) as i32,
-            alt_mm: (alt_m * 1000.0) as i32,
-            status: (converged as u8) | ((has_3d_fix as u8) << 1),
-        }
-    }
-}
-
 /// `WireGnssOriginSet::flags` bit 0: the origin fields are meaningful.
 pub const ORIGIN_SET_FLAG_VALID: u8 = 0x01;
 
@@ -190,17 +137,17 @@ pub const ORIGIN_SET_FLAG_VALID: u8 = 0x01;
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct WireGnssOriginSet {
-    /// Latitude [deg].
+    /// Latitude (deg).
     pub lat_deg: f64,
-    /// Longitude [deg].
+    /// Longitude (deg).
     pub lon_deg: f64,
-    /// WGS84 ellipsoidal height [m]. NOT mean sea level.
+    /// WGS84 ellipsoidal height (m). NOT mean sea level.
     pub h_ell_m: f32,
     /// Bit0 [`ORIGIN_SET_FLAG_VALID`].
     pub flags: u8,
 }
 
-impl WireMessage for WireGnssOriginSet {
+unsafe impl WireMessage for WireGnssOriginSet {
     const MSG_ID: u8 = msg_id::GNSS_ORIGIN_SET;
 }
 
@@ -242,16 +189,16 @@ pub struct WireDatalinkStatus {
     pub kind: u8,
     /// [`datalink_state`] for WiFi.
     pub state: u8,
-    /// RSSI of the associated access point from its last beacon [dBm];
+    /// RSSI of the associated access point from its last beacon (dBm);
     /// [`RSSI_UNKNOWN`] when not associated.
     pub rssi_dbm: i8,
     /// WiFi disconnects since the bridge booted (saturating).
     pub reconnects: u16,
-    /// Bridge uptime [ms], wrapping. A drop means the bridge rebooted.
+    /// Bridge uptime (ms), wrapping. A drop means the bridge rebooted.
     pub bridge_uptime_ms: u32,
 }
 
-impl WireMessage for WireDatalinkStatus {
+unsafe impl WireMessage for WireDatalinkStatus {
     const MSG_ID: u8 = msg_id::DATALINK_STATUS;
 }
 
@@ -312,7 +259,7 @@ pub mod origin_state {
 /// `WireGnssOrigin::source` values.
 pub mod origin_source {
     pub const NONE: u8 = 0;
-    /// Ground-station uplink ([`WireGnssOriginSet`]).
+    /// Ground-station uplink ([`WireGnssOriginSet`](crate::wire::WireGnssOriginSet)).
     pub const UPLINK: u8 = 1;
     /// Vehicle YAML `origin:` (offline / fixed-site override).
     pub const BAKED_YAML: u8 = 2;
@@ -326,23 +273,23 @@ pub mod origin_source {
 #[repr(C, packed)]
 pub struct WireGnssOrigin {
     pub timestamp_us: u64,
-    /// Latched origin latitude [deg]; zero until latched.
+    /// Latched origin latitude (deg); zero until latched.
     pub lat_deg: f64,
-    /// Latched origin longitude [deg]; zero until latched.
+    /// Latched origin longitude (deg); zero until latched.
     pub lon_deg: f64,
-    /// Latched origin WGS84 ellipsoidal height [m]; zero until latched.
+    /// Latched origin WGS84 ellipsoidal height (m); zero until latched.
     pub h_ell_m: f32,
     /// See [`origin_state`].
     pub state: u8,
     /// See [`origin_source`].
     pub source: u8,
-    /// HOME (latched at the arm edge) in this drone's ENU frame [m].
+    /// HOME (latched at the arm edge) in this drone's ENU frame (m).
     pub home_enu: [f32; 3],
     /// 1 when `home_enu` is meaningful (armed with a latched home).
     pub home_valid: u8,
 }
 
-impl WireMessage for WireGnssOrigin {
+unsafe impl WireMessage for WireGnssOrigin {
     const MSG_ID: u8 = msg_id::GNSS_ORIGIN;
 }
 
@@ -362,7 +309,7 @@ pub struct WireImu {
     pub temp: f32,
 }
 
-impl WireMessage for WireImu {
+unsafe impl WireMessage for WireImu {
     const MSG_ID: u8 = msg_id::IMU;
 }
 
@@ -386,7 +333,7 @@ pub struct WireVehicleAttitude {
     pub orientation: [f32; 4], // [x, y, z, w]
 }
 
-impl WireMessage for WireVehicleAttitude {
+unsafe impl WireMessage for WireVehicleAttitude {
     const MSG_ID: u8 = msg_id::VEHICLE_ATTITUDE;
 }
 
@@ -414,7 +361,7 @@ pub struct WireRcInput {
     pub channel_count: u8,
 }
 
-impl WireMessage for WireRcInput {
+unsafe impl WireMessage for WireRcInput {
     const MSG_ID: u8 = msg_id::RC_INPUT;
 }
 
@@ -440,7 +387,7 @@ pub struct WireRcLinkStatus {
     pub rf_mode: u8,
 }
 
-impl WireMessage for WireRcLinkStatus {
+unsafe impl WireMessage for WireRcLinkStatus {
     const MSG_ID: u8 = msg_id::RC_LINK_STATUS;
 }
 
@@ -466,7 +413,7 @@ pub struct WireDshotTelemetry {
     pub raw: [u16; 4],
 }
 
-impl WireMessage for WireDshotTelemetry {
+unsafe impl WireMessage for WireDshotTelemetry {
     const MSG_ID: u8 = msg_id::DSHOT_TELEMETRY;
 }
 
@@ -505,7 +452,7 @@ pub struct WireMotorStateTelemetry {
     pub raw: [f32; 4],
 }
 
-impl WireMessage for WireMotorStateTelemetry {
+unsafe impl WireMessage for WireMotorStateTelemetry {
     const MSG_ID: u8 = msg_id::MOTOR_STATE_TELEMETRY;
 }
 
@@ -544,7 +491,7 @@ pub struct WireOcpSolverOutput {
     pub policy_time_us: u32,
 }
 
-impl WireMessage for WireOcpSolverOutput {
+unsafe impl WireMessage for WireOcpSolverOutput {
     const MSG_ID: u8 = msg_id::OCP_SOLVER_OUTPUT;
 }
 
@@ -584,7 +531,7 @@ pub struct WireGpsFix {
     pub pdop: u16,
 }
 
-impl WireMessage for WireGpsFix {
+unsafe impl WireMessage for WireGpsFix {
     const MSG_ID: u8 = msg_id::GPS_FIX;
 }
 
@@ -616,7 +563,7 @@ pub struct WireMagSample {
     pub temp_c: f32,
 }
 
-impl WireMessage for WireMagSample {
+unsafe impl WireMessage for WireMagSample {
     const MSG_ID: u8 = msg_id::MAG_EXT;
 }
 
@@ -640,7 +587,7 @@ pub struct WireBaroSample {
     pub temp_c: f32,
 }
 
-impl WireMessage for WireBaroSample {
+unsafe impl WireMessage for WireBaroSample {
     const MSG_ID: u8 = msg_id::BARO_1;
 }
 
@@ -671,7 +618,7 @@ pub struct WirePowerStatus {
     pub _pad: u8,
 }
 
-impl WireMessage for WirePowerStatus {
+unsafe impl WireMessage for WirePowerStatus {
     const MSG_ID: u8 = msg_id::POWER_STATUS;
 }
 
@@ -700,7 +647,7 @@ pub struct WireAttitudeControlSetpoint {
     pub torque_n_m: [f32; 3],
 }
 
-impl WireMessage for WireAttitudeControlSetpoint {
+unsafe impl WireMessage for WireAttitudeControlSetpoint {
     const MSG_ID: u8 = msg_id::ATTITUDE_CONTROL_SETPOINT;
 }
 
@@ -737,7 +684,7 @@ pub struct WireManualControlSetpoint {
     pub yaw_rate: f32,
 }
 
-impl WireMessage for WireManualControlSetpoint {
+unsafe impl WireMessage for WireManualControlSetpoint {
     const MSG_ID: u8 = msg_id::MANUAL_CONTROL_SETPOINT;
 }
 
@@ -762,7 +709,7 @@ pub struct WireArmDisarm {
     pub armed: u8,
 }
 
-impl WireMessage for WireArmDisarm {
+unsafe impl WireMessage for WireArmDisarm {
     const MSG_ID: u8 = msg_id::ARM_DISARM;
 }
 
@@ -786,7 +733,7 @@ pub struct WireVehicleOdometry {
     pub velocity: [f32; 3],
 }
 
-impl WireMessage for WireVehicleOdometry {
+unsafe impl WireMessage for WireVehicleOdometry {
     const MSG_ID: u8 = msg_id::VEHICLE_ODOMETRY;
 }
 
@@ -821,7 +768,7 @@ pub struct WirePositionControlSetpoint {
     pub yaw: f32,
 }
 
-impl WireMessage for WirePositionControlSetpoint {
+unsafe impl WireMessage for WirePositionControlSetpoint {
     const MSG_ID: u8 = msg_id::POSITION_CONTROL_SETPOINT;
 }
 
@@ -845,7 +792,7 @@ pub struct WireActuatorMotors {
     pub motor_commands: [f32; 4], // [0.0, 1.0] per motor
 }
 
-impl WireMessage for WireActuatorMotors {
+unsafe impl WireMessage for WireActuatorMotors {
     const MSG_ID: u8 = msg_id::ACTUATOR_MOTORS;
 }
 
@@ -860,110 +807,6 @@ impl WireActuatorMotors {
                 msg.motor_commands[2].value(),
                 msg.motor_commands[3].value(),
             ],
-        }
-    }
-}
-
-/// Wire GNSS/INS status (APX-15) — 102 bytes.
-#[derive(Clone, Copy)]
-#[repr(C, packed)]
-pub struct WireGnssStatus {
-    pub timestamp_us: u64, // 8
-
-    // From #49 (InsFullNav) — status bytes
-    pub imu_alignment: u8, // 1
-    pub gps_quality: u8,   // 1
-
-    // From #50 (InsRmsInfo) — position, velocity, attitude RMS
-    pub north_pos_rms: f32, // 4
-    pub east_pos_rms: f32,  // 4
-    pub down_pos_rms: f32,  // 4
-    pub north_vel_rms: f32, // 4
-    pub east_vel_rms: f32,  // 4
-    pub down_vel_rms: f32,  // 4
-    pub roll_rms: f32,      // 4
-    pub pitch_rms: f32,     // 4
-    pub heading_rms: f32,   // 4
-
-    // From #12 (PositionSigmaInfo)
-    pub sigma_east: f32,  // 4
-    pub sigma_north: f32, // 4
-    pub sigma_up: f32,    // 4
-
-    // From #1 (PositionTime)
-    pub num_svs: u8,    // 1
-    pub pos_flags1: u8, // 1
-    pub pos_flags2: u8, // 1
-
-    // From #38 (PositionTypeInfo)
-    pub solution_flags: u8,    // 1
-    pub rtk_condition: u8,     // 1
-    pub correction_age: f32,   // 4
-    pub network_flags: u8,     // 1
-    pub position_fix_type: u8, // 1
-
-    // From #9 (PdopInfo)
-    pub pdop: f32, // 4
-    pub hdop: f32, // 4
-    pub vdop: f32, // 4
-    pub tdop: f32, // 4
-
-    // From #35 (ReceivedBaseInfo)
-    pub base_id: u16, // 2
-
-    // From #40 (LbandStatus)
-    pub lband_snr: f32,       // 4
-    pub lband_hp_xp_mode: u8, // 1
-    pub lband_vbs_mode: u8,   // 1
-
-    // From #10 (ClockInfo)
-    pub clock_flags: u8,      // 1
-    pub clock_offset_ms: f32, // 4
-    pub freq_offset_ppm: f32, // 4
-}
-
-impl WireMessage for WireGnssStatus {
-    const MSG_ID: u8 = msg_id::GNSS_STATUS;
-}
-
-#[cfg(feature = "embedded")]
-impl WireGnssStatus {
-    pub fn from_msg(msg: &crate::GnssStatus) -> Self {
-        Self {
-            timestamp_us: msg.timestamp.as_micros(),
-            imu_alignment: msg.imu_alignment,
-            gps_quality: msg.gps_quality,
-            north_pos_rms: msg.north_pos_rms,
-            east_pos_rms: msg.east_pos_rms,
-            down_pos_rms: msg.down_pos_rms,
-            north_vel_rms: msg.north_vel_rms,
-            east_vel_rms: msg.east_vel_rms,
-            down_vel_rms: msg.down_vel_rms,
-            roll_rms: msg.roll_rms,
-            pitch_rms: msg.pitch_rms,
-            heading_rms: msg.heading_rms,
-            sigma_east: msg.sigma_east,
-            sigma_north: msg.sigma_north,
-            sigma_up: msg.sigma_up,
-            num_svs: msg.num_svs,
-            pos_flags1: msg.pos_flags1,
-            pos_flags2: msg.pos_flags2,
-            solution_flags: msg.solution_flags,
-            rtk_condition: msg.rtk_condition,
-            correction_age: msg.correction_age,
-            network_flags: msg.network_flags,
-            position_fix_type: msg.position_fix_type,
-            pdop: msg.pdop,
-            hdop: msg.hdop,
-            vdop: msg.vdop,
-            tdop: msg.tdop,
-            base_id: msg.base_id,
-            lband_snr: msg.lband_snr,
-            lband_hp_xp_mode: msg.lband_hp_xp_mode,
-            lband_vbs_mode: msg.lband_vbs_mode,
-            clock_flags: msg.clock_flags,
-            clock_offset_ms: msg.clock_offset_ms,
-            freq_offset_ppm: msg.freq_offset_ppm,
         }
     }
 }
@@ -1006,7 +849,7 @@ pub struct WireMissionStatus {
     pub solve_reject_reason: u8,
 }
 
-impl WireMessage for WireMissionStatus {
+unsafe impl WireMessage for WireMissionStatus {
     const MSG_ID: u8 = msg_id::MISSION_STATUS;
 }
 
@@ -1056,7 +899,7 @@ pub struct WireEstimatorStatus {
     pub roll_deg: f32,
     pub pitch_deg: f32,
     pub yaw_deg: f32,
-    /// Sum of position-covariance diagonal entries [m²].
+    /// Sum of position-covariance diagonal entries (m²).
     pub pos_cov_trace: f32,
     /// Sum of velocity-covariance diagonal entries [m²/s²].
     pub vel_cov_trace: f32,
@@ -1079,7 +922,7 @@ pub struct WireEstimatorStatus {
     pub _pad: [u8; 2],
 }
 
-impl WireMessage for WireEstimatorStatus {
+unsafe impl WireMessage for WireEstimatorStatus {
     const MSG_ID: u8 = msg_id::ESTIMATOR_STATUS;
 }
 
@@ -1101,7 +944,7 @@ pub struct WirePose {
     pub orientation: [f32; 4], // [x, y, z, w]
 }
 
-impl WireMessage for WirePose {
+unsafe impl WireMessage for WirePose {
     const MSG_ID: u8 = msg_id::POSE;
 }
 
@@ -1138,7 +981,7 @@ pub struct WireTimeSync {
     pub prev_tx_complete_ntp_us: i64,
 }
 
-impl WireMessage for WireTimeSync {
+unsafe impl WireMessage for WireTimeSync {
     const MSG_ID: u8 = msg_id::TIME_SYNC;
 }
 
@@ -1150,7 +993,7 @@ pub struct WirePing {
     pub stm32_send_us: u64,
 }
 
-impl WireMessage for WirePing {
+unsafe impl WireMessage for WirePing {
     const MSG_ID: u8 = msg_id::PING;
 }
 
@@ -1164,7 +1007,7 @@ pub struct WirePingResp {
     pub gs_send_time_us: i64,
 }
 
-impl WireMessage for WirePingResp {
+unsafe impl WireMessage for WirePingResp {
     const MSG_ID: u8 = msg_id::PING_RESP;
 }
 
@@ -1221,7 +1064,7 @@ pub struct WireFleetState {
     pub entries: [WireFleetEntry; MAX_FLEET],
 }
 
-impl WireMessage for WireFleetState {
+unsafe impl WireMessage for WireFleetState {
     const MSG_ID: u8 = msg_id::FLEET_STATE;
 }
 
@@ -1239,7 +1082,7 @@ pub struct WireTimeSyncStatus {
     pub ping_clock_err_us: i64,
 }
 
-impl WireMessage for WireTimeSyncStatus {
+unsafe impl WireMessage for WireTimeSyncStatus {
     const MSG_ID: u8 = msg_id::TIME_SYNC_STATUS;
 }
 
@@ -1289,7 +1132,7 @@ pub struct WireSystemHealth {
     pub _pad: [u8; 3],
 }
 
-impl WireMessage for WireSystemHealth {
+unsafe impl WireMessage for WireSystemHealth {
     const MSG_ID: u8 = msg_id::SYSTEM_HEALTH;
 }
 
@@ -1308,16 +1151,16 @@ pub struct WireDatalinkHealth {
     pub state: u8,
     pub rssi_dbm: i8,
     pub reconnects: u16,
-    /// Age of the last radio status report [ms] — is the bridge alive?
+    /// Age of the last radio status report (ms) — is the bridge alive?
     pub status_age_ms: u32,
-    /// Age of the last ground-station-originated frame [ms] — is the
+    /// Age of the last ground-station-originated frame (ms) — is the
     /// ground still getting through?
     pub uplink_age_ms: u32,
-    /// Last ground-station ping round trip [ms]; `u32::MAX` = none yet.
+    /// Last ground-station ping round trip (ms); `u32::MAX` = none yet.
     pub ping_rtt_ms: u32,
 }
 
-impl WireMessage for WireDatalinkHealth {
+unsafe impl WireMessage for WireDatalinkHealth {
     const MSG_ID: u8 = msg_id::DATALINK_HEALTH;
 }
 
@@ -1363,7 +1206,7 @@ pub struct WireVehicleIdentity {
     pub _pad: [u8; 7],
 }
 
-impl WireMessage for WireVehicleIdentity {
+unsafe impl WireMessage for WireVehicleIdentity {
     const MSG_ID: u8 = msg_id::VEHICLE_IDENTITY;
 }
 
@@ -1480,7 +1323,7 @@ pub struct WireGpsHealth {
     pub _pad: u8,
 }
 
-impl WireMessage for WireGpsHealth {
+unsafe impl WireMessage for WireGpsHealth {
     const MSG_ID: u8 = msg_id::GPS_HEALTH;
 }
 
@@ -1606,5 +1449,36 @@ mod datalink_wire_tests {
         let back = WireDatalinkHealth::from_bytes(w.as_bytes()).unwrap();
         let (st, up, rtt) = (back.state, back.uplink_age_ms, back.ping_rtt_ms);
         assert_eq!((st, up, rtt), (datalink_state::DISCONNECTED, u32::MAX, 12));
+    }
+}
+
+
+#[cfg(test)]
+mod pose_contract_tests {
+    use super::{WireMessage, WirePose};
+
+    #[test]
+    fn pose_has_two_timestamps_and_xyzw_quaternion() {
+        let pose = WirePose {
+            capture_time_us: 1,
+            gs_send_time_us: 2,
+            position: [1.0, -2.0, 3.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let expected: [u8; 44] = [
+            1, 0, 0, 0, 0, 0, 0, 0,
+            2, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 128, 63, 0, 0, 0, 192, 0, 0, 64, 64,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63,
+        ];
+        assert_eq!(pose.as_bytes(), &expected);
+        assert!(WirePose::from_bytes(&expected[..36]).is_none());
+        let mut unaligned = [0u8; 45];
+        unaligned[1..].copy_from_slice(&expected);
+        let decoded = WirePose::from_bytes(&unaligned[1..]).unwrap();
+        let position = decoded.position;
+        let orientation = decoded.orientation;
+        assert_eq!(position, [1.0, -2.0, 3.0]);
+        assert_eq!(orientation, [0.0, 0.0, 0.0, 1.0]);
     }
 }

@@ -14,7 +14,7 @@
 //!
 //! * `MARKER` is 0, a value [`crate::wire::msg_id`] reserves and never
 //!   assigns, so a receiver tells a batch from a legacy single-frame datagram
-//!   by its first byte alone. Both forms are accepted by [`classify`].
+//!   by its first byte alone. Both forms are accepted by [`classify`](crate::udp_batch::classify).
 //! * The four counters are the bridge's own cumulative, wrapping health
 //!   counters — UART0 receive errors, telemetry frames the bridge dropped, and
 //!   RTCM datagrams received / dropped — so the ground station can tell loss
@@ -25,8 +25,8 @@
 //! A bridge belongs to one ground station at a time. It answers any other
 //! sender's uplink with a **busy notice**, `[0x00 MARKER][KIND_BUSY][owner
 //! IPv4: 4 bytes]`, at most once a second, so a second ground station started
-//! by mistake can tell its operator which PC owns the drone. [`classify`]
-//! reports it as [`Datagram::Busy`]; a receiver that predates it sees an
+//! by mistake can tell its operator which PC owns the drone. [`classify`](crate::udp_batch::classify)
+//! reports it as [`Datagram::Busy`](crate::udp_batch::Datagram::Busy); a receiver that predates it sees an
 //! unsupported version and ignores it.
 //!
 //! `no_std`, no allocation: the same code runs on the bridge and the host.

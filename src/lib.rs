@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(target_endian = "big")]
+compile_error!("cybflight wire messages require a little-endian target");
+
 pub mod wire;
 
 /// Downlink datagram envelope (bridge → ground station). See [`udp_batch`].
@@ -183,65 +186,9 @@ impl NeighborStates {
 #[cfg(feature = "embedded")]
 impl Message for NeighborStates {}
 
-/// A peer drone's pose decoded from [`wire::WirePeerPose`] (direct leader→chaser
-/// link). lat/lon in **radians**, alt in metres MSL — ready to reproject into the
-/// local ENU via `LlhOrigin::llh_to_enu`.
-#[cfg(feature = "embedded")]
-#[derive(Clone, Copy, defmt::Format)]
-pub struct PeerPose {
-    /// Local RX instant — basis for staleness.
-    pub rx: Instant,
-    /// Sender capture time, UTC microseconds.
-    pub timestamp_us: u64,
-    pub lat_rad: f64,
-    pub lon_rad: f64,
-    pub alt_m: f32,
-    /// Sender's ESKF has converged.
-    pub converged: bool,
-    /// Sender has a ≥3D GNSS fix.
-    pub has_3d_fix: bool,
-}
-
-#[cfg(feature = "embedded")]
-impl PeerPose {
-    pub fn from_wire(w: &wire::WirePeerPose, rx: Instant) -> Self {
-        const DEG2RAD: f64 = core::f64::consts::PI / 180.0;
-        // Copy packed fields before use (unaligned reads are UB by reference).
-        let lat_1e7 = w.lat_1e7;
-        let lon_1e7 = w.lon_1e7;
-        let alt_mm = w.alt_mm;
-        let status = w.status;
-        let timestamp_us = w.timestamp_us;
-        Self {
-            rx,
-            timestamp_us,
-            lat_rad: (lat_1e7 as f64) * 1e-7 * DEG2RAD,
-            lon_rad: (lon_1e7 as f64) * 1e-7 * DEG2RAD,
-            alt_m: (alt_mm as f32) * 1e-3,
-            converged: status & wire::PEER_FLAG_CONVERGED != 0,
-            has_3d_fix: status & wire::PEER_FLAG_3D_FIX != 0,
-        }
-    }
-
-    /// How long since this pose was received.
-    pub fn age(&self, now: Instant) -> embassy_time::Duration {
-        now.checked_duration_since(self.rx)
-            .unwrap_or(embassy_time::Duration::from_ticks(0))
-    }
-
-    /// Usable for tracking: sender converged + has a 3D fix + fresh.
-    pub fn usable(&self, now: Instant, max_age: embassy_time::Duration) -> bool {
-        self.converged && self.has_3d_fix && self.age(now) <= max_age
-    }
-}
-
-#[cfg(feature = "embedded")]
-impl Message for PeerPose {}
-
 /// Ground-station session origin (msg 133), decoded and validated.
 ///
-/// Published by the ESP-bridge RX task on `sensors::GNSS_ORIGIN_CMD` and
-/// consumed by the GPS estimator, which latches it as its ENU origin.
+/// Consumers must explicitly implement and validate this optional command.
 #[cfg(feature = "embedded")]
 #[derive(Clone, Copy, defmt::Format)]
 pub struct GnssOriginCmd {
@@ -249,7 +196,7 @@ pub struct GnssOriginCmd {
     pub rx: Instant,
     pub lat_rad: f64,
     pub lon_rad: f64,
-    /// WGS84 ellipsoidal height [m].
+    /// WGS84 ellipsoidal height (m).
     pub h_ell_m: f32,
 }
 
@@ -328,7 +275,7 @@ impl Message for RcLinkStatus {}
 #[derive(Clone, defmt::Format)]
 pub struct NmpcSetpoint {
     pub timestamp: Instant,
-    /// Target position in world frame [m].
+    /// Target position in world frame (m).
     pub position: Vector3<f32>,
 }
 
@@ -438,7 +385,7 @@ pub struct OcpSolverOutput {
     pub converged: bool,
     pub solve_time_us: u64,
     /// Wall time of the learned cost policy's observation + inference
-    /// this tick [µs]. 0 when no policy is baked/enabled (and always 0
+    /// this tick (µs). 0 when no policy is baked/enabled (and always 0
     /// under `outer_mpc_full`). Runs off the command's critical path —
     /// after the publish — so this is budget telemetry, not latency.
     pub policy_time_us: u32,
@@ -633,13 +580,13 @@ impl Message for MissionStatus {}
 #[derive(Clone, defmt::Format)]
 pub struct NmpcControlOutput {
     pub timestamp: Instant,
-    /// Collective thrust along body z [N].
+    /// Collective thrust along body z (N).
     pub collective_thrust_n: f32,
     /// Desired body rate [rad/s] from NMPC predicted next state.
     pub body_rate_rad_s: Vector3<f32>,
     /// Desired attitude quaternion (for geometric controller).
     pub attitude_quaternion: UnitQuaternion<f32>,
-    /// Per-motor thrusts [N] (used when direct_motor_control is true).
+    /// Per-motor thrusts (N) (used when direct_motor_control is true).
     pub motor_thrusts: [f32; 4],
     /// Whether the NMPC solver converged.
     pub converged: bool,
@@ -801,70 +748,3 @@ pub struct NavigationCommand {
 
 #[cfg(feature = "embedded")]
 impl Message for NavigationCommand {}
-
-// ── GNSS Status (APX-15 INS) ───────────────────────────────────────────────
-
-/// Comprehensive GNSS/INS status from APX-15 for go/no-go decision making.
-///
-/// Carries quality indicators from GSOF messages #49, #50, #12, #1, #38,
-/// #9, #35, #40, #10 needed to determine whether the INS solution is
-/// usable for flight.
-#[cfg(feature = "embedded")]
-#[derive(Clone, defmt::Format)]
-pub struct GnssStatus {
-    pub timestamp: Instant,
-
-    // From #49 (InsFullNav) — status bytes
-    pub imu_alignment: u8,
-    pub gps_quality: u8,
-
-    // From #50 (InsRmsInfo) — position, velocity, attitude RMS
-    pub north_pos_rms: f32,
-    pub east_pos_rms: f32,
-    pub down_pos_rms: f32,
-    pub north_vel_rms: f32,
-    pub east_vel_rms: f32,
-    pub down_vel_rms: f32,
-    pub roll_rms: f32,
-    pub pitch_rms: f32,
-    pub heading_rms: f32,
-
-    // From #12 (PositionSigmaInfo)
-    pub sigma_east: f32,
-    pub sigma_north: f32,
-    pub sigma_up: f32,
-
-    // From #1 (PositionTime)
-    pub num_svs: u8,
-    pub pos_flags1: u8,
-    pub pos_flags2: u8,
-
-    // From #38 (PositionTypeInfo)
-    pub solution_flags: u8,
-    pub rtk_condition: u8,
-    pub correction_age: f32,
-    pub network_flags: u8,
-    pub position_fix_type: u8,
-
-    // From #9 (PdopInfo)
-    pub pdop: f32,
-    pub hdop: f32,
-    pub vdop: f32,
-    pub tdop: f32,
-
-    // From #35 (ReceivedBaseInfo)
-    pub base_id: u16,
-
-    // From #40 (LbandStatus)
-    pub lband_snr: f32,
-    pub lband_hp_xp_mode: u8,
-    pub lband_vbs_mode: u8,
-
-    // From #10 (ClockInfo)
-    pub clock_flags: u8,
-    pub clock_offset_ms: f32,
-    pub freq_offset_ppm: f32,
-}
-
-#[cfg(feature = "embedded")]
-impl Message for GnssStatus {}
